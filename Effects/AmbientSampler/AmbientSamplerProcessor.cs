@@ -66,7 +66,10 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             return drawDesc;
 
         long frame = desc.TimelinePosition.Frame;
-        int interval = Math.Max(1, _item.SampleInterval);
+        // 間隔はミリ秒指定。プロジェクトの FPS に合わせてフレーム数へ換算する
+        // （フレーム単位で持つと 30fps と 60fps で追従速度が変わってしまう）。
+        int fps = Math.Max(1, desc.FPS);
+        int interval = Math.Max(1, (int)Math.Round(fps * _item.SampleIntervalMs / 1000.0));
 
         // 間引き（SampleInterval）は「連続再生で少しずつ前へ進む」ときだけの最適化。
         // 巻き戻しシークは内容が変わった可能性が高いので即座に測り直す。
@@ -177,7 +180,7 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             var map = _staging.Map(MapOptions.Read);
             try
             {
-                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);
+                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);  // 0..1 の相対しきい値
             }
             finally
             {
@@ -196,9 +199,15 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     /// <summary>
     /// 縮小画像から代表色と色グリッドを求める。
     ///
-    /// 代表色は「輝度が threshold 以上の画素だけの平均」。建物・木・道路といった暗色に引きずられず、
-    /// 空・光源・明部＝実際に光を投げている部分を環境光として取り出すため。
-    /// しきい値を超える画素が無ければ全画素平均へフォールバックする（真っ暗な背景でも破綻しない）。
+    /// 代表色は「輝度が明部基準の threshold 以上の画素だけの平均」。建物・木・道路といった暗色に
+    /// 引きずられず、空・光源・明部＝実際に光を投げている部分を環境光として取り出すため。
+    ///
+    /// 【しきい値は絶対値ではなく「画面内の最大輝度に対する相対値」にすること】
+    /// 絶対値だと、0% は全画素平均・100% は該当画素ゼロで全画素平均へフォールバックとなり、
+    /// <b>スライダーの両端が同じ結果</b>になる（実機で判明）。さらに夜景のように全体が暗い背景では
+    /// どんな値でも該当画素が無く、常にフォールバックしていた。
+    /// 最大輝度を基準にすれば 0→100% が単調に「全体の平均 → 最も明るい部分の色」へ変化し、
+    /// 明るい背景でも暗い背景でも同じ感覚で効く。
     ///
     /// 一方グリッドは「その場所の背景色」が欲しいのでしきい値を掛けない。
     /// 不透明画素が1つも無いセルは代表色で埋め、対応付けがずれても破綻しないようにする。
@@ -215,6 +224,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         var cellSum = new Vector3[G * G];
         var cellCount = new int[G * G];
 
+        // 1パス目: グリッドと全画素平均を作りつつ、最大輝度を求める（相対しきい値の基準）
+        float maxLum = 0f;
         for (int y = 0; y < N; y++)
         {
             byte* row = p + y * pitch;
@@ -232,17 +243,36 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
                 float r = px[2] / 255f / pa;
 
                 allR += r; allG += g; allB += b; allA += pa; allCount++;
-
-                float lum = 0.299f * r + 0.587f * g + 0.114f * b;
-                if (lum >= threshold)
-                {
-                    selR += r; selG += g; selB += b; selA += pa; selCount++;
-                }
+                maxLum = MathF.Max(maxLum, 0.299f * r + 0.587f * g + 0.114f * b);
 
                 int gx = Math.Min(x * G / N, G - 1);
                 int gi = gy * G + gx;
                 cellSum[gi] += new Vector3(r, g, b);
                 cellCount[gi]++;
+            }
+        }
+
+        // 2パス目: 最大輝度を基準にした相対しきい値で代表色を作る。
+        // しきい値100%でも最大輝度の画素自身は必ず残るので、両端が同じ結果になることはない。
+        float absThreshold = maxLum * Math.Clamp(threshold, 0f, 1f);
+        for (int y = 0; y < N; y++)
+        {
+            byte* row = p + y * pitch;
+            for (int x = 0; x < N; x++)
+            {
+                byte* px = row + x * 4;
+                float pa = px[3] / 255f;
+                if (pa <= 1e-4f)
+                    continue;
+
+                float b = px[0] / 255f / pa;
+                float g = px[1] / 255f / pa;
+                float r = px[2] / 255f / pa;
+
+                if (0.299f * r + 0.587f * g + 0.114f * b >= absThreshold)
+                {
+                    selR += r; selG += g; selB += b; selA += pa; selCount++;
+                }
             }
         }
 
