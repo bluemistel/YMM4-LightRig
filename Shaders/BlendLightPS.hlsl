@@ -50,8 +50,14 @@ cbuffer Constants : register(b0)
     float c6r; float c6g; float c6b;
     float c7r; float c7g; float c7b;
     float c8r; float c8g; float c8b;
-    float _pad;
+
+    float method;        // 0=光を重ねる（光レイヤーを出力）, 1=色調同化（最終色を出力）
+    float toneStrength;  // 色味の同化量 0..1（背景の色味を乗算で移す）
+    float lumaMatch;     // 明るさ合わせ 0..1（背景の輝度へ寄せる）
+    float _pad0; float _pad1;
 };
+
+static const float3 LUMA = float3(0.299f, 0.587f, 0.114f);
 
 /// 3x3 グリッドをバイリニア補間して背景色を得る。
 /// セル中心を uv = 0, 0.5, 1 に置く（端をクランプするだけで矩形外も破綻しない）。
@@ -85,7 +91,8 @@ float4 main(float4 pos : SV_POSITION,
             float4 posScene : SCENE_POSITION,
             float4 uv : TEXCOORD0) : SV_TARGET
 {
-    float aHere = InputTexture.Sample(InputSampler, uv.xy).a;
+    float4 src = InputTexture.Sample(InputSampler, uv.xy);
+    float aHere = src.a;
 
     float2 dir = float2(lightDirX, lightDirY);
     float2 center = float2(inputLeft + inputWidth * 0.5f, inputTop + inputHeight * 0.5f);
@@ -118,7 +125,8 @@ float4 main(float4 pos : SV_POSITION,
         mask = aHere;
     }
 
-    if (mask <= 0.0f)
+    // 色調同化は最終色を出力するので、マスクが 0 でも元画素を通す必要がある
+    if (mask <= 0.0f && method < 0.5f)
         return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     float3 bg;
@@ -132,8 +140,33 @@ float4 main(float4 pos : SV_POSITION,
         bg = float3(fallbackR, fallbackG, fallbackB);
     }
 
-    float lum = dot(bg, float3(0.299f, 0.587f, 0.114f));
+    float lum = dot(bg, LUMA);
     bg = max(lerp(float3(lum, lum, lum), bg, saturation) * gain, 0.0f);
 
-    return float4(bg * mask, mask); // プリマルチプライド
+    // --- 方式1: 光レイヤーを出力し、後段のぼかし＋合成モードで重ねる ---
+    if (method < 0.5f)
+        return float4(bg * mask, mask); // プリマルチプライド
+
+    // --- 方式2: 色調同化。背景の「色味」を乗算で移し、「明るさ」は別枠で寄せる ---
+    // 乗算だけだと暗くなる一方なので手動で持ち上げる必要があった。
+    // 背景色を輝度1に正規化して色味だけ取り出せば、色の調整が明るさに影響しない
+    // （M9 の「色と明るさは必ず分離する」と同じ方針）。
+    if (aHere <= 1e-4f)
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    float3 srcRgb = src.rgb / aHere;     // プリマルチプライドを解除
+
+    float bgLum = max(dot(bg, LUMA), 1e-4f);
+    float3 bgTone = bg / bgLum;          // 輝度をならした色味だけの成分
+
+    float3 col = srcRgb * lerp(1.0f.xxx, bgTone, saturate(toneStrength) * mask);
+
+    // 明るさを背景へ寄せる。比で合わせるので負にならず、暗部の階調も潰れにくい。
+    // 極端な明暗差で破綻しないよう倍率はクランプする。
+    float curLum = max(dot(col, LUMA), 1e-4f);
+    float ratio = clamp(bgLum / curLum, 0.25f, 4.0f);
+    col *= lerp(1.0f, ratio, saturate(lumaMatch) * mask);
+
+    col = max(col, 0.0f);
+    return float4(col * aHere, aHere); // プリマルチプライド
 }

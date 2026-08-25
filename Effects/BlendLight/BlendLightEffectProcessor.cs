@@ -33,6 +33,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
     private float _lastSaturation, _lastGain, _lastBlur, _lastWeight;
     private float _lastUvOriginX, _lastUvOriginY, _lastUvScaleX, _lastUvScaleY;
     private float _lastUseGrid = -1f;
+    private float _lastMethod = -1f, _lastTone = -1f, _lastLumaMatch = -1f;
     private float _lastFallbackR = -1f, _lastFallbackG = -1f, _lastFallbackB = -1f;
     private readonly Vector3[] _lastCells = new Vector3[AmbientState.GridSize * AmbientState.GridSize];
     private bool _hasCells;
@@ -122,6 +123,9 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         var offsetX = (float)_item.OffsetX.GetValue(frame, length, fps);
         var offsetY = (float)_item.OffsetY.GetValue(frame, length, fps);
         var mode = (float)(int)_item.Mode; // 0=グラデーション, 1=縁取り, 2=全体
+        var method = (float)(int)_item.Method; // 0=光を重ねる, 1=色調同化
+        var tone = (float)(_item.ToneStrength.GetValue(frame, length, fps) / 100.0);
+        var lumaMatch = (float)(_item.LumaMatch.GetValue(frame, length, fps) / 100.0);
         var local = _item.LocalColor;
 
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
@@ -207,12 +211,22 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         if (_isFirst || fallbackR != _lastFallbackR) { _light.FallbackR = fallbackR; _lastFallbackR = fallbackR; }
         if (_isFirst || fallbackG != _lastFallbackG) { _light.FallbackG = fallbackG; _lastFallbackG = fallbackG; }
         if (_isFirst || fallbackB != _lastFallbackB) { _light.FallbackB = fallbackB; _lastFallbackB = fallbackB; }
+        if (_isFirst || tone != _lastTone) { _light.ToneStrength = tone; _lastTone = tone; }
+        if (_isFirst || lumaMatch != _lastLumaMatch) { _light.LumaMatch = lumaMatch; _lastLumaMatch = lumaMatch; }
         if (_isFirst || blur != _lastBlur) { _blur.StandardDeviation = blur; _lastBlur = blur; }
 
+        // 色調同化はシェーダーが最終色を出すので、ぼかし・合成モードの段を通さず直結する
         var blendMode = _item.BlendMode;
-        if (_isFirst || blendMode != _lastBlendMode)
+        if (_isFirst || method != _lastMethod || blendMode != _lastBlendMode)
         {
-            if (blendMode.IsCompositionEffect())
+            _light.Method = method;
+
+            if (method >= 0.5f)
+            {
+                using var toned = _light.Output;
+                _crossFade.SetInput(0, toned, true);
+            }
+            else if (blendMode.IsCompositionEffect())
             {
                 _composite.Mode = blendMode.ToD2DCompositionMode();
                 using var composited = _composite.Output;
@@ -225,6 +239,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
                 _crossFade.SetInput(0, blended, true);
             }
             _lastBlendMode = blendMode;
+            _lastMethod = method;
         }
         if (_isFirst || weight != _lastWeight) { _crossFade.Weight = weight; _lastWeight = weight; }
 

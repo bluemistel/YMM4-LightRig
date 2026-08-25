@@ -24,6 +24,18 @@ public enum BlendLightMode
     Uniform = 2,
 }
 
+/// <summary>背景色の乗せ方（合成の方式）。</summary>
+public enum BlendLightMethod
+{
+    [Display(Name = "色調同化",
+        Description = "背景の色味を乗算で移し、明るさは別枠で背景へ寄せる。合成モードの手動切り替えが要らない")]
+    ToneMatch = 1,
+
+    [Display(Name = "光を重ねる",
+        Description = "背景色の光レイヤーをぼかして合成モードで重ねる。加算・スクリーンで発光感を出したいとき")]
+    Layer = 0,
+}
+
 /// <summary>背景色をどう引くか。</summary>
 public enum BlendLightColorSource
 {
@@ -67,6 +79,12 @@ public class BlendLightEffect : VideoEffectBase
     public BlendLightMode Mode { get => mode; set => Set(ref mode, value); }
     BlendLightMode mode = BlendLightMode.Gradient;
 
+    [Display(GroupName = "なじませ", Name = "方式",
+        Description = "色調同化=背景の色味を乗算で移し明るさを別枠で合わせる（既定）/ 光を重ねる=光レイヤーを合成モードで重ねる")]
+    [EnumComboBox]
+    public BlendLightMethod Method { get => method; set => Set(ref method, value); }
+    BlendLightMethod method = BlendLightMethod.ToneMatch;
+
     [Display(GroupName = "なじませ", Name = "強さ", Description = "背景色を乗せる量")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Intensity { get; } = new Animation(60, 0, 100);
@@ -86,12 +104,24 @@ public class BlendLightEffect : VideoEffectBase
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Softness { get; } = new Animation(0, 0, 100);
 
+    [Display(GroupName = "色調同化", Name = "色味の同化", Description = "背景の色味をどれだけ乗算で移すか。明るさは変えません")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.ToneMatch)]
+    [AnimationSlider("F0", "%", 0, 100)]
+    public Animation ToneStrength { get; } = new Animation(70, 0, 100);
+
+    [Display(GroupName = "色調同化", Name = "明るさ合わせ", Description = "背景の明るさへどれだけ寄せるか。乗算で暗くなりすぎた分をここで戻します")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.ToneMatch)]
+    [AnimationSlider("F0", "%", 0, 100)]
+    public Animation LumaMatch { get; } = new Animation(40, 0, 100);
+
     [Display(GroupName = "なじませ", Name = "ぼかし量", Description = "乗せる光のぼかし（px）。大きいほど柔らかく馴染む")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.Layer)]
     [AnimationSlider("F1", "px", 0, 100)]
     public Animation Blur { get; } = new Animation(20, 0, 1000);
 
     [Display(GroupName = "なじませ", Name = "合成モード",
-        Description = "ソフトライト=背景が明るければ明るく暗ければ暗く自動で寄る（既定・手動切替が不要）/ 通常=背景色へ単純に寄せる（アルファブレンド）/ カラー=元の明るさを保ったまま色味だけ移す / スクリーン・加算=明るくするだけ / 乗算=暗くするだけ")]
+        Description = "ソフトライト=明暗に応じて自動で寄る / 通常=アルファブレンド / カラー=明るさを保ち色味だけ移す / スクリーン・加算=明るくするだけ / 乗算=暗くするだけ")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.Layer)]
     [EnumComboBox]
     public YukkuriMovieMaker.Project.Blend BlendMode { get => blendMode; set => Set(ref blendMode, value); }
     // 既定はソフトライト。スクリーンや加算は「明るくする」ことしかできないため、
@@ -142,5 +172,6 @@ public class BlendLightEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, Intensity, Spread, RimWidth, Softness, Blur, Saturation, Gain, RangeScale, OffsetX, OffsetY];
+        => [AngleOffset, Intensity, Spread, RimWidth, Softness, Blur, ToneStrength, LumaMatch,
+            Saturation, Gain, RangeScale, OffsetX, OffsetY];
 }
