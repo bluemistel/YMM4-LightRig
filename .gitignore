@@ -1,0 +1,23 @@
+# Build
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.cache
+*.log
+.claude
+
+# Visual Studio / VS Code
+.vs/
+*.rsuser
+
+# Publish / package
+publish/
+*.ymme.zip
+build_log.txt
+
+# BOOTH 用の説明文（GitHub には上げない）
+説明文_BOOTH.txt
+リリース文面.md

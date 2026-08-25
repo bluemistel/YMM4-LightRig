@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <!-- 開発用 YMM4 の配置フォルダ（末尾に \ が必要） -->
+    <YMM4DirPath Condition="'$(YMM4DirPath)' == ''">C:\tools\YukkuriMovieMaker_Dev\</YMM4DirPath>
+
+    <!-- HLSL コンパイラ fxc.exe（Windows SDK 付属）の探索 -->
+    <WindowsKitRoot>C:\Program Files (x86)\Windows Kits\10\bin</WindowsKitRoot>
+
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.28000.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.28000.0\x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.26100.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.26100.0\x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.22621.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.22621.0\x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.19041.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.19041.0\x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.18362.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.18362.0\x64\fxc.exe</FxcPath>
+    <FxcPath Condition="'$(FxcPath)' == '' AND Exists('$(WindowsKitRoot)\10.0.17763.0\x64\fxc.exe')">$(WindowsKitRoot)\10.0.17763.0\x64\fxc.exe</FxcPath>
+
+    <FxcPath Condition="'$(FxcPath)' == ''">fxc.exe</FxcPath>
+  </PropertyGroup>
+</Project>

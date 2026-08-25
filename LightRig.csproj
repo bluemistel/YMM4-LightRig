@@ -1,0 +1,127 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>13.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>AnyCPU;x64</Platforms>
+
+    <AssemblyName>LightRig</AssemblyName>
+    <RootNamespace>LightRig</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>bluemistel</Authors>
+    <Product>LightRig</Product>
+    <Description>シーンに1つ置いた仮想光源を全エフェクトが自動参照する YMM4 ライティングプラグイン。リムライト・シェーディング・逆光・リライティング・落とし影・空気遠近・背景なじませを一括で連動させる。</Description>
+    <NeutralLanguage>ja-JP</NeutralLanguage>
+  </PropertyGroup>
+
+  <!-- ================= HLSL シェーダーのビルド時コンパイル ================= -->
+  <ItemGroup>
+    <HlslShader Include="Shaders\**\*.hlsl" />
+  </ItemGroup>
+
+  <ItemDefinitionGroup>
+    <HlslShader>
+      <ShaderType>ps_5_0</ShaderType>
+      <EntryPoint>main</EntryPoint>
+      <ObjectFileOutput>$(IntermediateOutputPath)Shaders\%(RelativeDir)%(Filename).cso</ObjectFileOutput>
+    </HlslShader>
+  </ItemDefinitionGroup>
+
+  <!-- fxc.exe で .hlsl → .cso にコンパイル -->
+  <Target Name="CompileHLSLShaders" BeforeTargets="PrepareForBuild"
+          Condition="'$(SkipHlsl)' != 'true'"
+          Inputs="@(HlslShader)" Outputs="@(HlslShader->'%(ObjectFileOutput)')">
+    <Message Text="Compiling HLSL Shader: %(HlslShader.Identity) [Type: %(HlslShader.ShaderType), Entry: %(HlslShader.EntryPoint)]" Importance="high" />
+    <Error Text="fxc.exe が見つかりません ($(FxcPath))。Windows SDK をインストールしてください。"
+           Condition="!Exists('$(FxcPath)') AND '$(FxcPath)' != 'fxc.exe'" />
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('%(HlslShader.ObjectFileOutput)'))" />
+    <Exec Command="&quot;$(FxcPath)&quot; /nologo /T %(HlslShader.ShaderType) /E %(HlslShader.EntryPoint) /Fo &quot;%(HlslShader.ObjectFileOutput)&quot; &quot;%(HlslShader.FullPath)&quot;"
+          Condition="Exists('%(HlslShader.FullPath)')" />
+  </Target>
+
+  <!-- コンパイル済み .cso を埋め込みリソースとして取り込む -->
+  <Target Name="IncludeCompiledShaders" AfterTargets="CompileHLSLShaders" BeforeTargets="PrepareResources"
+          Condition="'$(SkipHlsl)' != 'true'">
+    <ItemGroup>
+      <CompiledShaders Include="$(IntermediateOutputPath)Shaders\**\*.cso" />
+      <EmbeddedResource Include="@(CompiledShaders)">
+        <LogicalName>$(RootNamespace).Shaders.$([System.String]::new('%(RelativeDir)').Replace('\', '.').Replace('/', '.'))%(Filename)%(Extension)</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+    <Message Text="Embedded Shader Resource: %(EmbeddedResource.LogicalName)" Importance="low" />
+  </Target>
+
+  <!-- ================= YMM4 / Vortice / SharpGen 参照 ================= -->
+  <ItemGroup>
+    <Reference Include="SharpGen.Runtime">
+      <HintPath>$(YMM4DirPath)SharpGen.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SharpGen.Runtime.COM">
+      <HintPath>$(YMM4DirPath)SharpGen.Runtime.COM.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Vortice.Direct2D1">
+      <HintPath>$(YMM4DirPath)Vortice.Direct2D1.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Vortice.Direct3D11">
+      <HintPath>$(YMM4DirPath)Vortice.Direct3D11.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Vortice.DirectX">
+      <HintPath>$(YMM4DirPath)Vortice.DirectX.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Vortice.Mathematics">
+      <HintPath>$(YMM4DirPath)Vortice.Mathematics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="YukkuriMovieMaker">
+      <HintPath>$(YMM4DirPath)YukkuriMovieMaker.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="YukkuriMovieMaker.Controls">
+      <HintPath>$(YMM4DirPath)YukkuriMovieMaker.Controls.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="YukkuriMovieMaker.Plugin">
+      <HintPath>$(YMM4DirPath)YukkuriMovieMaker.Plugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- ================= ビルド後に YMM4 プラグインフォルダへ配置 ================= -->
+  <Target Name="CopyToYmm4PluginDir" AfterTargets="Build" Condition="'$(SkipPluginCopy)' != 'true'">
+    <MakeDir Directories="$(YMM4DirPath)user\plugin\$(AssemblyName)" />
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(YMM4DirPath)user\plugin\$(AssemblyName)"
+          SkipUnchangedFiles="true" />
+    <Message Text="✓ Copied $(AssemblyName).dll to $(YMM4DirPath)user\plugin\$(AssemblyName)" Importance="high" />
+  </Target>
+
+  <!-- ================= 配布用 .ymme パッケージの生成 ================= -->
+  <!-- 使い方: dotnet build -c Release -p:Platform=x64 -p:PackYmme=true -->
+  <!-- 出力: publish\LightRig.v.<Version>.ymme（中に LightRig\ フォルダ） -->
+  <Target Name="MakeYmme" AfterTargets="Build" Condition="'$(PackYmme)' == 'true'">
+    <PropertyGroup>
+      <YmmeStageRoot>$(OutputPath)ymme</YmmeStageRoot>
+      <YmmeStage>$(YmmeStageRoot)\$(AssemblyName)</YmmeStage>
+      <YmmeOut>$(MSBuildProjectDirectory)\publish\$(AssemblyName).v.$(Version).ymme</YmmeOut>
+    </PropertyGroup>
+    <RemoveDir Directories="$(YmmeStageRoot)" />
+    <MakeDir Directories="$(YmmeStage)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(YmmeStage)" />
+    <Copy SourceFiles="README.md" DestinationFolder="$(YmmeStage)" Condition="Exists('README.md')" />
+    <Copy SourceFiles="LICENSE" DestinationFolder="$(YmmeStage)" Condition="Exists('LICENSE')" />
+    <MakeDir Directories="$(MSBuildProjectDirectory)\publish" />
+    <Delete Files="$(YmmeOut)" />
+    <ZipDirectory SourceDirectory="$(YmmeStageRoot)" DestinationFile="$(YmmeOut)" Overwrite="true" />
+    <Message Text="✓ ymme package created: $(YmmeOut)" Importance="high" />
+  </Target>
+
+</Project>

@@ -1,0 +1,257 @@
+using System.Numerics;
+using Vortice.DCommon;
+using Vortice.Direct2D1;
+using Vortice.Mathematics;
+using YukkuriMovieMaker.Commons;
+using YukkuriMovieMaker.Player.Video;
+using LightRig.Shared;
+
+namespace LightRig.Effects.AmbientSampler;
+
+/// <summary>
+/// 環境光サンプラーのプロセッサ。映像はパススルーし、数フレームおきに入力画像を NxN へ縮小して
+/// GPU→CPU 読み戻しし、次の2つを発信する。
+/// <list type="bullet">
+/// <item>代表色 … 輝度しきい値以上の画素の平均色（従来どおり。リライティングの環境光ミックス等が使う）</item>
+/// <item>色グリッド … 背景を 3x3 に区切ったセル平均色。「背景なじませ」が立ち絵の位置に応じた背景色を引く</item>
+/// </list>
+/// 読み戻しは専用の DeviceContext・オフスクリーンビットマップで行い、本体のレンダーは触らない。
+/// 失敗時は _disabled で以降のサンプリングを止め、パススルーのみに縮退する。
+/// </summary>
+internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
+{
+    // サンプリング解像度（NxN）。しきい値で画素を選別するため、統計が安定する程度の解像度を取る。
+    // グリッドの1辺 G は N を割り切る必要はない（セル境界は整数除算で切る）。
+    const int N = 8;
+    const int G = AmbientState.GridSize;
+
+    private readonly IGraphicsDevicesAndContext _devices;
+    private readonly AmbientSamplerEffect _item;
+
+    private ID2D1Image? _input;
+
+    private ID2D1DeviceContext? _dc;
+    private ID2D1Bitmap1? _target;   // 描画先（NxN, Target）
+    private ID2D1Bitmap1? _staging;  // 読み戻し用（NxN, CpuRead）
+    private bool _disabled;
+
+    private long _lastSampledFrame = long.MinValue;
+    private Vector4 _lastColor = new(0.5f, 0.5f, 0.5f, 1f);
+    private Vector3[]? _lastGrid;
+    private Vector2 _lastLocalSize;  // 入力画像のローカルサイズ（px）。矩形は毎フレーム drawDesc から作り直す
+    private bool _hasColor;
+
+    public AmbientSamplerProcessor(IGraphicsDevicesAndContext devices, AmbientSamplerEffect item)
+    {
+        _devices = devices;
+        _item = item;
+    }
+
+    public ID2D1Image Output => _input!;
+
+    public void SetInput(ID2D1Image? input) => _input = input;
+
+    public void ClearInput() => _input = null;
+
+    public DrawDescription Update(EffectDescription desc)
+    {
+        var drawDesc = desc.DrawDescription;
+        if (_input is null)
+            return drawDesc;
+
+        long frame = desc.TimelinePosition.Frame;
+        int interval = Math.Max(1, _item.SampleInterval);
+
+        if (!_disabled && (!_hasColor || Math.Abs(frame - _lastSampledFrame) >= interval))
+        {
+            if (TrySample(out var color, out var grid, out var localSize))
+            {
+                _lastColor = color;
+                _lastGrid = grid;
+                _lastLocalSize = localSize;
+                _hasColor = true;
+                _lastSampledFrame = frame;
+            }
+        }
+
+        // 毎フレーム（自 Usage 向けに）最後に測った色を発信する。
+        // 矩形だけは毎フレーム作り直す。サンプリングを間引いていても、
+        // 背景が動けば「どのセルがどこか」の対応付けは追従させたいため。
+        if (_hasColor)
+        {
+            var min = SceneRect(drawDesc, out var size);
+            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, new AmbientState
+            {
+                Color = _lastColor,
+                Grid = _lastGrid,
+                RectMin = min,
+                RectSize = size,
+            });
+        }
+
+        return drawDesc;
+    }
+
+    /// <summary>
+    /// 背景アイテムがシーン上で占める矩形を、ローカルサイズ・Draw 位置・Zoom から求める。
+    /// アイテム中心を Draw 位置とみなす近似で、回転は考慮しない
+    /// （ずれる場合は消費側の「位置オフセット」「範囲倍率」で補正する）。
+    /// </summary>
+    private Vector2 SceneRect(DrawDescription drawDesc, out Vector2 size)
+    {
+        size = _lastLocalSize * drawDesc.Zoom;
+        var center = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
+        return center - size * 0.5f;
+    }
+
+    private bool TrySample(out Vector4 color, out Vector3[]? grid, out Vector2 localSize)
+    {
+        color = default;
+        grid = null;
+        localSize = default;
+        try
+        {
+            var mainDc = _devices.DeviceContext;
+            EnsureResources(mainDc);
+            if (_dc is null || _target is null || _staging is null || _input is null)
+                return false;
+
+            // 入力画像の範囲を取得し、NxN へ収める変換を作る
+            var b = mainDc.GetImageLocalBounds(_input);
+            float w = b.Right - b.Left;
+            float h = b.Bottom - b.Top;
+            if (!(w > 0f) || !(h > 0f) || !float.IsFinite(w) || !float.IsFinite(h))
+                return false;
+            localSize = new Vector2(w, h);
+
+            var transform = Matrix3x2.CreateTranslation(-b.Left, -b.Top)
+                          * Matrix3x2.CreateScale(N / w, N / h);
+
+            _dc.Target = _target;
+            _dc.BeginDraw();
+            _dc.Transform = transform;
+            _dc.Clear(new Color4(0f, 0f, 0f, 0f));
+            // 【補間モード】1920x1080 → 8x8 のような極端な縮小では、バイリニア（Linear）は
+            // 出力1画素あたり数テクセルしか読まないため「平均」ではなく飛び飛びの点サンプルになる。
+            // 明るい光源の画素をたまたま拾うとセルが実際より大幅に明るくなり、
+            // 「背景は隅ほど暗いのに、なじませの色が暗くならない」という見え方になる。
+            // Anisotropic はミップマップを使うので、縮小率が大きくても面積平均に近い色が得られる。
+            _dc.DrawImage(_input, InterpolationMode.Anisotropic, CompositeMode.SourceOver);
+            _dc.EndDraw();
+            _dc.Target = null;
+
+            // CPU 読み戻し
+            _staging.CopyFromBitmap(_target);
+            var map = _staging.Map(MapOptions.Read);
+            try
+            {
+                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);
+            }
+            finally
+            {
+                _staging.Unmap();
+            }
+            return true;
+        }
+        catch
+        {
+            // 一度でも失敗したら以降は試みない（例外の連発を避ける）
+            _disabled = true;
+            DisposeResources();
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 縮小画像から代表色と色グリッドを求める。
+    ///
+    /// 代表色は「輝度が threshold 以上の画素だけの平均」。建物・木・道路といった暗色に引きずられず、
+    /// 空・光源・明部＝実際に光を投げている部分を環境光として取り出すため。
+    /// しきい値を超える画素が無ければ全画素平均へフォールバックする（真っ暗な背景でも破綻しない）。
+    ///
+    /// 一方グリッドは「その場所の背景色」が欲しいのでしきい値を掛けない。
+    /// 不透明画素が1つも無いセルは代表色で埋め、対応付けがずれても破綻しないようにする。
+    /// </summary>
+    private unsafe void Analyze(nint bits, int pitch, float threshold, out Vector4 color, out Vector3[] grid)
+    {
+        var p = (byte*)bits;
+
+        double selR = 0, selG = 0, selB = 0, selA = 0;
+        int selCount = 0;
+        double allR = 0, allG = 0, allB = 0, allA = 0;
+        int allCount = 0;
+
+        var cellSum = new Vector3[G * G];
+        var cellCount = new int[G * G];
+
+        for (int y = 0; y < N; y++)
+        {
+            byte* row = p + y * pitch;
+            int gy = Math.Min(y * G / N, G - 1);
+            for (int x = 0; x < N; x++)
+            {
+                byte* px = row + x * 4; // B8G8R8A8
+                float pa = px[3] / 255f;
+                if (pa <= 1e-4f)
+                    continue; // 透明部分は背景色として扱わない
+
+                // プリマルチプライドを解除
+                float b = px[0] / 255f / pa;
+                float g = px[1] / 255f / pa;
+                float r = px[2] / 255f / pa;
+
+                allR += r; allG += g; allB += b; allA += pa; allCount++;
+
+                float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+                if (lum >= threshold)
+                {
+                    selR += r; selG += g; selB += b; selA += pa; selCount++;
+                }
+
+                int gx = Math.Min(x * G / N, G - 1);
+                int gi = gy * G + gx;
+                cellSum[gi] += new Vector3(r, g, b);
+                cellCount[gi]++;
+            }
+        }
+
+        if (selCount > 0)
+            color = new Vector4((float)(selR / selCount), (float)(selG / selCount), (float)(selB / selCount), (float)(selA / selCount));
+        else if (allCount > 0)
+            color = new Vector4((float)(allR / allCount), (float)(allG / allCount), (float)(allB / allCount), (float)(allA / allCount));
+        else
+            color = new Vector4(0f, 0f, 0f, 0f);
+
+        var fallback = new Vector3(color.X, color.Y, color.Z);
+        grid = new Vector3[G * G];
+        for (int i = 0; i < grid.Length; i++)
+            grid[i] = cellCount[i] > 0 ? cellSum[i] / cellCount[i] : fallback;
+    }
+
+    private void EnsureResources(ID2D1DeviceContext mainDc)
+    {
+        if (_dc is not null)
+            return;
+
+        var device = mainDc.Device;
+        _dc = device.CreateDeviceContext(DeviceContextOptions.None);
+
+        var size = new SizeI(N, N);
+        var fmt = new PixelFormat(Vortice.DXGI.Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied);
+
+        _target = _dc.CreateBitmap(size, IntPtr.Zero, 0,
+            new BitmapProperties1(fmt, 96, 96, BitmapOptions.Target));
+
+        _staging = _dc.CreateBitmap(size, IntPtr.Zero, 0,
+            new BitmapProperties1(fmt, 96, 96, BitmapOptions.CpuRead | BitmapOptions.CannotDraw));
+    }
+
+    private void DisposeResources()
+    {
+        _target?.Dispose(); _target = null;
+        _staging?.Dispose(); _staging = null;
+        _dc?.Dispose(); _dc = null;
+    }
+
+    public void Dispose() => DisposeResources();
+}
