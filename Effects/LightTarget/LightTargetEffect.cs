@@ -6,6 +6,7 @@ using YukkuriMovieMaker.Exo;
 using YukkuriMovieMaker.Player.Video;
 using YukkuriMovieMaker.Plugin;
 using YukkuriMovieMaker.Plugin.Effects;
+using YukkuriMovieMaker.ItemEditor.CustomVisibilityAttributes;
 using LightRig.Shared;
 
 namespace LightRig.Effects.LightTarget;
@@ -81,22 +82,28 @@ public class LightTargetEffect : VideoEffectBase
     LightFalloffMode falloffMode = LightFalloffMode.None;
 
     [Display(GroupName = "範囲・減衰", Name = "到達距離", Description = "この距離で光が完全に届かなくなる（px）。プレビューの外側の円がこの距離")]
+    [ShowPropertyEditorWhen(nameof(FalloffMode), LightFalloffMode.Range)]
     [AnimationSlider("F0", "px", 100, 5000)]
     public Animation Range { get; } = new Animation(1000, 1, 100000);
 
     [Display(GroupName = "範囲・減衰", Name = "減衰の始まり", Description = "到達距離のどこから暗くなり始めるか。ここまでは等倍。0=到達距離いっぱいをかけて緩やかに落ちる, 100に近い=縁で急に切れる")]
+    [ShowPropertyEditorWhen(nameof(FalloffMode), LightFalloffMode.Range)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation FalloffStart { get; } = new Animation(40, 0, 100);
 
-    [Display(GroupName = "範囲・減衰", Name = "光の角度", Description = "平行光の光が来る向き／スポットの照らす向き（0=上から下へ, 時計回り）")]
+    // 平行光とスポットの両方で使うので条件付き表示にできない
+    // （ShowPropertyEditorWhen は AllowMultiple=false・等値比較のみ）。
+    [Display(GroupName = "範囲・減衰", Name = "光の角度", Description = "平行光の光が来る向き／スポットの照らす向き（0=上から下へ, 時計回り）。点光源では使いません")]
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation Angle { get; } = new Animation(0, -360, 360);
 
     [Display(GroupName = "範囲・減衰", Name = "スポット角", Description = "スポットの円錐の広がり（全角）")]
+    [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "°", 1, 180)]
     public Animation SpotAngle { get; } = new Animation(60, 1, 180);
 
     [Display(GroupName = "範囲・減衰", Name = "スポットの縁", Description = "スポットの縁のぼけ具合（0=くっきり）")]
+    [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation SpotSoftness { get; } = new Animation(30, 0, 100);
 

@@ -121,15 +121,21 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         var rangeScale = (float)(_item.RangeScale.GetValue(frame, length, fps) / 100.0);
         var offsetX = (float)_item.OffsetX.GetValue(frame, length, fps);
         var offsetY = (float)_item.OffsetY.GetValue(frame, length, fps);
-        var mode = _item.Mode == BlendLightMode.Edge ? 1f : 0f;
+        var mode = (float)(int)_item.Mode; // 0=グラデーション, 1=縁取り, 2=全体
         var local = _item.LocalColor;
 
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
 
         // --- 光源方向の解決（連動 or 単体） ---
+        // モード＝全体は「光源を置かずに背景へ馴染ませる」ためのモードなので、
+        // 向きも強さも減衰も一切参照しない（光源があってもなじませ量が変わらない）。
         Vector2 dir;
         float lightIntensity = 1f;
-        if (_item.Channel != LightChannelOrOff.Off
+        if (_item.Mode == BlendLightMode.Uniform)
+        {
+            dir = LightMath.DirFromAngle(0f);
+        }
+        else if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var light))
         {
             dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
