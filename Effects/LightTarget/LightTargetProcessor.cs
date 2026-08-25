@@ -73,7 +73,8 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         // 色と明るさは分離して扱う。代表色をそのまま混ぜると暗い背景で光色まで暗くなり、
         // 「明るさの追従」と二重に効いてしまうため、色は最大成分で正規化して色味だけを取り出す。
         if ((ambientColorMix > 0f || ambientIntensityMix > 0f)
-            && AmbientSignalStore.TryGet(desc.SceneId, desc.Usage, item.Channel, out var ambient))
+            && AmbientSignalStore.TryGet(desc.SceneId, desc.Usage, item.Channel,
+                desc.TimelinePosition.Frame, out var ambient))
         {
             var amb = new Vector3(ambient.X, ambient.Y, ambient.Z);
 
@@ -92,6 +93,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
 
         var state = new LightState
         {
+            Frame = desc.TimelinePosition.Frame,
             Type = item.SourceType,
             // アイテムのワールド座標（drawDesc.Draw）を基準に、オフセットを加えた点を光源位置とする
             // （平行光では使われない）

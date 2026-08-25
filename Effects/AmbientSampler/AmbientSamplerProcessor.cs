@@ -33,7 +33,13 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     private ID2D1DeviceContext? _dc;
     private ID2D1Bitmap1? _target;   // 描画先（NxN, Target）
     private ID2D1Bitmap1? _staging;  // 読み戻し用（NxN, CpuRead）
-    private bool _disabled;
+
+    // 読み戻しの失敗は「永久停止」にしない。一度の失敗で二度と測らなくなると、
+    // 古い色を配り続けたまま復帰できず、原因も分からない状態になるため
+    // （実際に「停止すると古い環境光のまま固まる」不具合の候補になった）。
+    // 失敗するたびに間隔を空けて再挑戦する（例外の連発は避けつつ復帰はできる）。
+    private int _failureCount;
+    private long _retryAfterFrame = long.MinValue;
 
     private long _lastSampledFrame = long.MinValue;
     private Vector4 _lastColor = new(0.5f, 0.5f, 0.5f, 1f);
@@ -62,7 +68,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         long frame = desc.TimelinePosition.Frame;
         int interval = Math.Max(1, _item.SampleInterval);
 
-        if (!_disabled && (!_hasColor || Math.Abs(frame - _lastSampledFrame) >= interval))
+        var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
+        if (canTry && (!_hasColor || Math.Abs(frame - _lastSampledFrame) >= interval))
         {
             if (TrySample(out var color, out var grid, out var localSize))
             {
@@ -71,6 +78,13 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
                 _lastLocalSize = localSize;
                 _hasColor = true;
                 _lastSampledFrame = frame;
+                _failureCount = 0;
+            }
+            else
+            {
+                // 失敗回数に応じて再挑戦までの間隔を伸ばす（最大 600 フレーム）
+                _failureCount++;
+                _retryAfterFrame = frame + Math.Min(_failureCount, 10) * 60;
             }
         }
 
@@ -82,6 +96,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             var min = SceneRect(drawDesc, out var size);
             AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, new AmbientState
             {
+                // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。
+                Frame = _lastSampledFrame,
                 Color = _lastColor,
                 Grid = _lastGrid,
                 RectMin = min,
@@ -155,8 +171,7 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         }
         catch
         {
-            // 一度でも失敗したら以降は試みない（例外の連発を避ける）
-            _disabled = true;
+            // リソースを作り直せば復帰することがあるので、破棄だけして次の機会に再挑戦する
             DisposeResources();
             return false;
         }

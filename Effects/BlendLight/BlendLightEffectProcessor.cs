@@ -136,7 +136,8 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
             dir = LightMath.DirFromAngle(0f);
         }
         else if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var light))
+            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, out var light))
         {
             dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
             lightIntensity = light.Intensity
@@ -155,7 +156,8 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         float uvOriginX = 0f, uvOriginY = 0f, uvScaleX = 0f, uvScaleY = 0f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && AmbientSignalStore.TryGetState(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var ambient))
+            && AmbientSignalStore.TryGetState(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, out var ambient))
         {
             fallbackR = ambient.Color.X;
             fallbackG = ambient.Color.Y;

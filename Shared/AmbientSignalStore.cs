@@ -23,6 +23,12 @@ public readonly struct AmbientState
     /// <summary>グリッドの1辺のセル数。</summary>
     public const int GridSize = 3;
 
+    /// <summary>
+    /// この値を測定したタイムライン上のフレーム。
+    /// 消費側が「今のフレームで測られた値か」を判定するために使う（古い時刻の値を拾う事故を防ぐ）。
+    /// </summary>
+    public long Frame { get; init; }
+
     /// <summary>代表色（輝度しきい値以上の画素の平均, 非プリマルチプライド sRGB 0..1）。</summary>
     public Vector4 Color { get; init; }
 
@@ -64,36 +70,84 @@ internal static class AmbientSignalStore
         perUsage[usage] = (Interlocked.Increment(ref sequence), state);
     }
 
-    public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, out AmbientState state)
+    /// <summary>
+    /// 環境光の状態を取得する。<paramref name="frame"/> には消費側の
+    /// <c>TimelinePosition.Frame</c>（発信側と同じ時計）を渡すこと。
+    ///
+    /// 【選択の優先順位】
+    /// <list type="number">
+    /// <item>同じ Usage かつ同じフレームで測られた値（最良）</item>
+    /// <item>別 Usage だが同じフレームで測られた値（一時停止時の再描画用フォールバック）</item>
+    /// <item>同じ Usage の値（フレームは古い）</item>
+    /// <item>最も新しい Seq（最後の手段）</item>
+    /// </list>
+    ///
+    /// 【なぜフレームを見るか（2026-08・実機の不具合）】
+    /// 以前は「同じ Usage → 無ければ最新 Seq」だけで選んでいた。そのため、再生を止めて
+    /// YMM4 が別 Usage で描き直すと、消費側は自分の Usage が無いので最新 Seq へ落ち、
+    /// <b>再生中の最後に発信された「別の時刻」の色</b>（例: 夕方のシーンの色）を拾ってしまい、
+    /// 真夜中のシーンに夕方の環境光が乗ったまま固まった。フレーム一致を優先すれば起きない。
+    /// </summary>
+    public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out AmbientState state)
     {
         state = default;
         if (!signals.TryGetValue((sceneId, channel), out var perUsage))
             return false;
 
-        if (perUsage.TryGetValue(usage, out var exact))
+        var hasSameUsage = perUsage.TryGetValue(usage, out var sameUsage);
+        if (hasSameUsage && sameUsage.State.Frame == frame)
         {
-            state = exact.State;
+            state = sameUsage.State;
             return true;
         }
 
-        var found = false;
+        // 別 Usage でも同じフレームで測られていればそちらを優先する
+        long bestFrameSeq = -1;
+        var foundSameFrame = false;
+        AmbientState sameFrameState = default;
+
         long bestSeq = -1;
+        var foundAny = false;
+        AmbientState newestState = default;
+
         foreach (var entry in perUsage.Values)
         {
+            if (entry.State.Frame == frame && entry.Seq > bestFrameSeq)
+            {
+                bestFrameSeq = entry.Seq;
+                sameFrameState = entry.State;
+                foundSameFrame = true;
+            }
             if (entry.Seq > bestSeq)
             {
                 bestSeq = entry.Seq;
-                state = entry.State;
-                found = true;
+                newestState = entry.State;
+                foundAny = true;
             }
         }
-        return found;
+
+        if (foundSameFrame)
+        {
+            state = sameFrameState;
+            return true;
+        }
+        if (hasSameUsage)
+        {
+            state = sameUsage.State;
+            return true;
+        }
+        if (foundAny)
+        {
+            state = newestState;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>代表色だけが必要な消費側（リライティングの環境光ミックス等）向けの簡易版。</summary>
-    public static bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, out Vector4 color)
+    public static bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out Vector4 color)
     {
-        if (TryGetState(sceneId, usage, channel, out var state))
+        if (TryGetState(sceneId, usage, channel, frame, out var state))
         {
             color = state.Color;
             return true;
