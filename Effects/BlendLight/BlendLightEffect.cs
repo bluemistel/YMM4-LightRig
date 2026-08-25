@@ -90,10 +90,14 @@ public class BlendLightEffect : VideoEffectBase
     [AnimationSlider("F1", "px", 0, 100)]
     public Animation Blur { get; } = new Animation(20, 0, 1000);
 
-    [Display(GroupName = "なじませ", Name = "合成モード", Description = "元画像との合成方法")]
+    [Display(GroupName = "なじませ", Name = "合成モード",
+        Description = "ソフトライト=背景が明るければ明るく暗ければ暗く自動で寄る（既定・手動切替が不要）/ 通常=背景色へ単純に寄せる（アルファブレンド）/ カラー=元の明るさを保ったまま色味だけ移す / スクリーン・加算=明るくするだけ / 乗算=暗くするだけ")]
     [EnumComboBox]
     public YukkuriMovieMaker.Project.Blend BlendMode { get => blendMode; set => Set(ref blendMode, value); }
-    YukkuriMovieMaker.Project.Blend blendMode = YukkuriMovieMaker.Project.Blend.Screen;
+    // 既定はソフトライト。スクリーンや加算は「明るくする」ことしかできないため、
+    // 夕焼けのような暗く寄せたい背景では手動で乗算へ切り替える必要があった。
+    // ソフトライトは背景色の明暗に応じて自動的に明暗どちらへも寄るので切り替えが要らない。
+    YukkuriMovieMaker.Project.Blend blendMode = YukkuriMovieMaker.Project.Blend.SoftLight;
 
     [Display(GroupName = "背景色", Name = "色の取得", Description = "位置に応じた色=背景を3x3に区切って被写体の位置で補間 / 代表色=背景全体の明るい部分の平均色")]
     [EnumComboBox]

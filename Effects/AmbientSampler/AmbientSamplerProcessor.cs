@@ -68,8 +68,16 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         long frame = desc.TimelinePosition.Frame;
         int interval = Math.Max(1, _item.SampleInterval);
 
+        // 間引き（SampleInterval）は「連続再生で少しずつ前へ進む」ときだけの最適化。
+        // 巻き戻しシークは内容が変わった可能性が高いので即座に測り直す。
+        // これをしないと、真夜中→夕方へ1フレームずつ戻したとき
+        // |差分| が interval に達するまで（既定5フレーム）古い色が出続ける。
+        long delta = frame - _lastSampledFrame;
+        var seekedBackward = delta < 0;
+        var intervalElapsed = Math.Abs(delta) >= interval;
+
         var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
-        if (canTry && (!_hasColor || Math.Abs(frame - _lastSampledFrame) >= interval))
+        if (canTry && (!_hasColor || seekedBackward || intervalElapsed))
         {
             if (TrySample(out var color, out var grid, out var localSize))
             {
