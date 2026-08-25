@@ -32,12 +32,6 @@ public enum LightSourceType
 public readonly struct LightState
 {
     /// <summary>
-    /// この状態を発信したタイムライン上のフレーム。
-    /// 消費側が「今のフレームで発信された値か」を判定するために使う（別の時刻の値を拾う事故を防ぐ）。
-    /// </summary>
-    public long Frame { get; init; }
-
-    /// <summary>
     /// 光源の種類。<see cref="LightSourceType.Directional"/> のときは <see cref="Position"/> は使われず、
     /// <see cref="Angle"/> がそのまま光の向きになる（アイテムの位置によらず一定）。
     /// </summary>

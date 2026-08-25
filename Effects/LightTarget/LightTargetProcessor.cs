@@ -93,7 +93,6 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
 
         var state = new LightState
         {
-            Frame = desc.TimelinePosition.Frame,
             Type = item.SourceType,
             // アイテムのワールド座標（drawDesc.Draw）を基準に、オフセットを加えた点を光源位置とする
             // （平行光では使われない）
@@ -113,7 +112,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
             AmbientColor = default,
         };
 
-        LightSignalStore.Publish(desc.SceneId, desc.Usage, item.Channel, state);
+        LightSignalStore.Publish(desc.SceneId, desc.Usage, item.Channel, desc.TimelinePosition.Frame, state);
 
         // プレビュー上の操作点（位置はアイテム中心からのオフセット＝OffsetX/Y と同じ座標系）
         var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle);
