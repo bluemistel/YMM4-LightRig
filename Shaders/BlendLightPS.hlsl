@@ -140,12 +140,13 @@ float4 main(float4 pos : SV_POSITION,
         bg = float3(fallbackR, fallbackG, fallbackB);
     }
 
-    float lum = dot(bg, LUMA);
-    bg = max(lerp(float3(lum, lum, lum), bg, saturation) * gain, 0.0f);
+    // 彩度だけを先に適用する（明るさ gain はまだ掛けない）
+    float rawLum = dot(bg, LUMA);
+    float3 bgSat = max(lerp(float3(rawLum, rawLum, rawLum), bg, saturation), 0.0f);
 
     // --- 方式1: 光レイヤーを出力し、後段のぼかし＋合成モードで重ねる ---
     if (method < 0.5f)
-        return float4(bg * mask, mask); // プリマルチプライド
+        return float4(bgSat * gain * mask, mask); // プリマルチプライド
 
     // --- 方式2: 色調同化。背景の「色味」を乗算で移し、「明るさ」は別枠で寄せる ---
     // 乗算だけだと暗くなる一方なので手動で持ち上げる必要があった。
@@ -156,15 +157,20 @@ float4 main(float4 pos : SV_POSITION,
 
     float3 srcRgb = src.rgb / aHere;     // プリマルチプライドを解除
 
-    float bgLum = max(dot(bg, LUMA), 1e-4f);
-    float3 bgTone = bg / bgLum;          // 輝度をならした色味だけの成分
+    // 【明るさ(gain) は色味に掛けない】
+    // 色味は「輝度1に正規化した背景色」から作り、gain は明るさの目標値にだけ効かせる。
+    // gain を色味側にも掛けると、0% で背景色が真っ黒になって色味が黒（＝乗算で激しく暗転）に
+    // 化けるのに、1% では輝度正規化で普通の色相へ戻るため、0%→1% で見た目が飛ぶ。
+    float satLum = dot(bgSat, LUMA);
+    float3 bgTone = satLum > 1e-4f ? bgSat / satLum : float3(1.0f, 1.0f, 1.0f); // 暗すぎて色味が定まらなければ無彩＝色を変えない
+    float targetLum = max(satLum * gain, 0.0f);
 
     float3 col = srcRgb * lerp(1.0f.xxx, bgTone, saturate(toneStrength) * mask);
 
     // 明るさを背景へ寄せる。比で合わせるので負にならず、暗部の階調も潰れにくい。
     // 極端な明暗差で破綻しないよう倍率はクランプする。
     float curLum = max(dot(col, LUMA), 1e-4f);
-    float ratio = clamp(bgLum / curLum, 0.25f, 4.0f);
+    float ratio = clamp(targetLum / curLum, 0.25f, 4.0f);
     col *= lerp(1.0f, ratio, saturate(lumaMatch) * mask);
 
     col = max(col, 0.0f);

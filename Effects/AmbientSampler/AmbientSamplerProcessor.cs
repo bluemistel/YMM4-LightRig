@@ -71,13 +71,21 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         // 間引き（SampleInterval）は「連続再生で少しずつ前へ進む」ときだけの最適化。
         // 巻き戻しシークは内容が変わった可能性が高いので即座に測り直す。
         // これをしないと、真夜中→夕方へ1フレームずつ戻したとき
-        // |差分| が interval に達するまで（既定5フレーム）古い色が出続ける。
-        long delta = frame - _lastSampledFrame;
-        var seekedBackward = delta < 0;
-        var intervalElapsed = Math.Abs(delta) >= interval;
+        // 差分が interval に達するまで（既定5フレーム）古い色が出続ける。
+        //
+        // 【差分の計算は _hasColor が true のときだけ行うこと】
+        // _lastSampledFrame の初期値は long.MinValue なので、frame=0（タイムライン先頭へ
+        // ショートカットで飛んだ場合など）だと frame - long.MinValue が long.MinValue に
+        // オーバーフローし、Math.Abs が OverflowException を投げてプレビューが落ちる。
+        var needSample = !_hasColor;
+        if (!needSample)
+        {
+            long delta = frame - _lastSampledFrame; // 双方とも実在のフレームなので安全
+            needSample = delta < 0 || delta >= interval;
+        }
 
         var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
-        if (canTry && (!_hasColor || seekedBackward || intervalElapsed))
+        if (canTry && needSample)
         {
             if (TrySample(out var color, out var grid, out var localSize))
             {

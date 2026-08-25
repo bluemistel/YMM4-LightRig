@@ -111,7 +111,8 @@ internal sealed class FrameSignalStore<T>
         T nearest = default!;
         foreach (var entry in signals.ByFrame)
         {
-            long distance = Math.Abs(entry.Key - frame);
+            // Math.Abs は long.MinValue で例外になるため、引き算の向きで絶対値を作る
+            long distance = entry.Key >= frame ? entry.Key - frame : frame - entry.Key;
             if (distance < bestDistance || (distance == bestDistance && entry.Value.Seq > bestSeq))
             {
                 bestDistance = distance;
