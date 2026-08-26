@@ -113,7 +113,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         if (_hasColor)
         {
             var min = SceneRect(drawDesc, out var size);
-            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, frame, new AmbientState
+            // 発信元キーは Usage をまたいで同一の _item（プロセッサは Usage ごとに別インスタンス）
+            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, frame, _item, new AmbientState
             {
                 // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。
                 Frame = _lastSampledFrame,

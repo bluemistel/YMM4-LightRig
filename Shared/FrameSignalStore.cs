@@ -29,6 +29,14 @@ namespace LightRig.Shared;
 /// </para>
 ///
 /// <para>
+/// 【複数の発信元】同一フレームに複数の発信元（例: 街灯ごとに置いた光源ターゲット）が
+/// 存在しうるので、フレームごとの値は<b>発信元をキーにした辞書</b>で持つ。
+/// 発信元が自分のスロットだけを更新するため、同じチャンネルへ何個置いても上書きされない。
+/// 単一の値だけが要る消費側（環境光）は <see cref="TryGet"/>、
+/// 全部が要る消費側（光源の合成）は <see cref="TryGetAll"/> を使う。
+/// </para>
+///
+/// <para>
 /// 【タイミング注意】同一フレーム内での「発信側 → 消費側」の評価順は保証されない。
 /// 消費側は同一フレームの鮮度を前提にせず、直近既知値で許容する設計にすること。
 /// </para>
@@ -42,28 +50,43 @@ internal sealed class FrameSignalStore<T>
 
     readonly ConcurrentDictionary<(Guid SceneId, LightChannel Channel), ChannelSignals> channels = new();
 
+    /// <summary>同一フレームに発信された値。発信元（プロセッサのインスタンス）ごとにスロットを持つ。</summary>
+    sealed class FrameSlot
+    {
+        public readonly ConcurrentDictionary<object, T> ByPublisher = new(ReferenceEqualityComparer.Instance);
+        public long Seq;
+    }
+
     sealed class ChannelSignals
     {
-        /// <summary>Usage 別の最新値（従来のフォールバック用）。</summary>
+        /// <summary>Usage 別の最新値（最後の手段のフォールバック用）。</summary>
         public readonly ConcurrentDictionary<TimelineSourceUsage, (long Seq, T Value)> ByUsage = new();
 
         /// <summary>タイムライン上のフレーム別の値。Usage は問わない。</summary>
-        public readonly ConcurrentDictionary<long, (long Seq, T Value)> ByFrame = new();
+        public readonly ConcurrentDictionary<long, FrameSlot> ByFrame = new();
 
         public readonly Lock PruneLock = new();
     }
 
     /// <summary>
-    /// 値を発信する。<paramref name="frame"/> には <c>TimelinePosition.Frame</c> を渡すこと
+    /// 値を発信する。
+    /// <paramref name="frame"/> には <c>TimelinePosition.Frame</c> を渡すこと
     /// （消費側と同じ時計でないと一致判定が働かない。<c>ItemPosition</c> ではない）。
+    /// <paramref name="publisher"/> には<b>発信側エフェクトのアイテム</b>（プロセッサが保持している
+    /// <c>item</c>）を渡す。これが同一フレーム内でのスロットの識別子になる。
+    /// <b>プロセッサ自身（<c>this</c>）を渡してはいけない。</b>YMM4 は Usage ごとに別のプロセッサを
+    /// 作るため、同じ光源が複数スロットを占めて「光源が2個ある」と誤認され明るさが倍になる。
     /// </summary>
-    public void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, T value)
+    public void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, object publisher, T value)
     {
         var signals = channels.GetOrAdd((sceneId, channel), _ => new ChannelSignals());
         var seq = Interlocked.Increment(ref sequence);
 
         signals.ByUsage[usage] = (seq, value);
-        signals.ByFrame[frame] = (seq, value);
+
+        var slot = signals.ByFrame.GetOrAdd(frame, _ => new FrameSlot());
+        slot.ByPublisher[publisher] = value;
+        slot.Seq = seq;
 
         if (signals.ByFrame.Count > MaxHistory)
             Prune(signals);
@@ -87,8 +110,39 @@ internal sealed class FrameSignalStore<T>
     }
 
     /// <summary>
-    /// 値を取得する。<paramref name="frame"/> には消費側の <c>TimelinePosition.Frame</c> を渡すこと。
-    /// 「完全一致 → 最も近いフレーム → 同 Usage の最新 → 全体の最新」の順に探す。
+    /// 現在フレームに最も適したフレームスロットを探す。
+    /// 「完全一致 → 最も近いフレーム」の順。見つからなければ null。
+    /// </summary>
+    static FrameSlot? FindSlot(ChannelSignals signals, long frame)
+    {
+        if (signals.ByFrame.TryGetValue(frame, out var exact) && !exact.ByPublisher.IsEmpty)
+            return exact;
+
+        // 最も近いフレームの値。
+        // 背景アイテムがキャッシュされて再実行されなくても、シーク時に一度測っていれば拾える。
+        // 距離が同じなら新しい発信（Seq が大きい方）を採る。
+        long bestDistance = long.MaxValue, bestSeq = -1;
+        FrameSlot? nearest = null;
+        foreach (var entry in signals.ByFrame)
+        {
+            if (entry.Value.ByPublisher.IsEmpty)
+                continue;
+
+            // Math.Abs は long.MinValue で例外になるため、引き算の向きで絶対値を作る
+            long distance = entry.Key >= frame ? entry.Key - frame : frame - entry.Key;
+            if (distance < bestDistance || (distance == bestDistance && entry.Value.Seq > bestSeq))
+            {
+                bestDistance = distance;
+                bestSeq = entry.Value.Seq;
+                nearest = entry.Value;
+            }
+        }
+        return nearest;
+    }
+
+    /// <summary>
+    /// 値を1つ取得する。<paramref name="frame"/> には消費側の <c>TimelinePosition.Frame</c> を渡すこと。
+    /// 同一フレームに複数の発信元がある場合はそのうちの1つを返す（環境光のように1つで足りる用途向け）。
     /// </summary>
     public bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out T value)
     {
@@ -96,45 +150,24 @@ internal sealed class FrameSignalStore<T>
         if (!channels.TryGetValue((sceneId, channel), out var signals))
             return false;
 
-        // 1. 同じフレームで発信された値
-        if (signals.ByFrame.TryGetValue(frame, out var exact))
+        var slot = FindSlot(signals, frame);
+        if (slot is not null)
         {
-            value = exact.Value;
-            return true;
-        }
-
-        // 2. 最も近いフレームの値。
-        //    背景アイテムがキャッシュされて再実行されなくても、シーク時に一度測っていれば拾える。
-        //    距離が同じなら新しい発信（Seq が大きい方）を採る。
-        long bestDistance = long.MaxValue, bestSeq = -1;
-        var foundNearest = false;
-        T nearest = default!;
-        foreach (var entry in signals.ByFrame)
-        {
-            // Math.Abs は long.MinValue で例外になるため、引き算の向きで絶対値を作る
-            long distance = entry.Key >= frame ? entry.Key - frame : frame - entry.Key;
-            if (distance < bestDistance || (distance == bestDistance && entry.Value.Seq > bestSeq))
+            foreach (var v in slot.ByPublisher.Values)
             {
-                bestDistance = distance;
-                bestSeq = entry.Value.Seq;
-                nearest = entry.Value.Value;
-                foundNearest = true;
+                value = v;
+                return true;
             }
         }
-        if (foundNearest)
-        {
-            value = nearest;
-            return true;
-        }
 
-        // 3. 同じ Usage の最新値
+        // 同じ Usage の最新値
         if (signals.ByUsage.TryGetValue(usage, out var sameUsage))
         {
             value = sameUsage.Value;
             return true;
         }
 
-        // 4. 最後の手段（同一シーン・同一チャンネルで最後に発信された値）
+        // 最後の手段（同一シーン・同一チャンネルで最後に発信された値）
         long newestSeq = -1;
         var foundAny = false;
         foreach (var entry in signals.ByUsage.Values)
@@ -147,5 +180,32 @@ internal sealed class FrameSignalStore<T>
             }
         }
         return foundAny;
+    }
+
+    /// <summary>
+    /// 同一フレームに発信されたすべての値を取得する（複数光源の合成用）。
+    /// 見つからない場合はフォールバックとして単一値を1件だけ返す。
+    /// </summary>
+    public bool TryGetAll(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, List<T> destination)
+    {
+        destination.Clear();
+        if (!channels.TryGetValue((sceneId, channel), out var signals))
+            return false;
+
+        var slot = FindSlot(signals, frame);
+        if (slot is not null)
+        {
+            foreach (var v in slot.ByPublisher.Values)
+                destination.Add(v);
+            if (destination.Count > 0)
+                return true;
+        }
+
+        if (TryGet(sceneId, usage, channel, frame, out var single))
+        {
+            destination.Add(single);
+            return true;
+        }
+        return false;
     }
 }

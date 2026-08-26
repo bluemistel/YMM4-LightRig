@@ -61,8 +61,8 @@ internal static class AmbientSignalStore
     static readonly FrameSignalStore<AmbientState> store = new();
 
     /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
-    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, in AmbientState state)
-        => store.Publish(sceneId, usage, channel, frame, state);
+    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, object publisher, in AmbientState state)
+        => store.Publish(sceneId, usage, channel, frame, publisher, state);
 
     /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
     public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out AmbientState state)

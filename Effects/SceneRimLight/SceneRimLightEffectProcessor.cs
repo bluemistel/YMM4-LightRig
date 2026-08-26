@@ -119,18 +119,16 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
         float lightIntensity = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
             // 光源色と固定色をミックス
             effR = float.Lerp(local.R / 255f, light.Color.X, colorMix);
             effG = float.Lerp(local.G / 255f, light.Color.Y, colorMix);
             effB = float.Lerp(local.B / 255f, light.Color.Z, colorMix);
             // 光源強度 × ゆらぎ（frame から決定的に再計算）
-            lightIntensity = light.Intensity
-                * LightMath.Flicker(frame, fps, light.FlickerAmount, light.FlickerSpeed, light.FlickerSeed)
-                * LightMath.Attenuation(light, itemPos);
+            lightIntensity = light.Intensity;
         }
         else
         {

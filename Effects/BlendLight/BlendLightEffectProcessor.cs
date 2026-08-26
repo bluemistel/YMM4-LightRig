@@ -140,13 +140,11 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
             dir = LightMath.DirFromAngle(0f);
         }
         else if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
-            lightIntensity = light.Intensity
-                * LightMath.Flicker(frame, fps, light.FlickerAmount, light.FlickerSpeed, light.FlickerSeed)
-                * LightMath.Attenuation(light, itemPos);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
+            lightIntensity = light.Intensity;
         }
         else
         {

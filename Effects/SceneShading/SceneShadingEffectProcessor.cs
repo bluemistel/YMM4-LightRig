@@ -74,13 +74,13 @@ internal sealed class SceneShadingEffectProcessor : VideoEffectProcessorBase
         float lightZ = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
             lightZ = Math.Clamp(light.Height / 400f, 0.05f, 4f);
             // 光が届かない位置なら陰影も付かない（届かない＝そもそも光が当たっていない）
-            strength *= LightMath.Attenuation(light, itemPos);
+            strength *= light.Reach;
         }
         else
         {

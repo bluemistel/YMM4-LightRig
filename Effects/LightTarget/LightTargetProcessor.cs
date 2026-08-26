@@ -112,7 +112,11 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
             AmbientColor = default,
         };
 
-        LightSignalStore.Publish(desc.SceneId, desc.Usage, item.Channel, desc.TimelinePosition.Frame, state);
+        // 【発信元キーはプロセッサ（this）ではなくエフェクトのアイテム（item）にすること】
+        // YMM4 は Usage（Playing/Paused/Exporting）ごとに別のプロセッサを作るため、
+        // this をキーにすると同じ光源が複数スロットを占め、合成時に「光源が2個ある」と
+        // 誤認されて明るさが倍になる。item は Usage をまたいで同一インスタンスなので重複しない。
+        LightSignalStore.Publish(desc.SceneId, desc.Usage, item.Channel, desc.TimelinePosition.Frame, item, state);
 
         // プレビュー上の操作点（位置はアイテム中心からのオフセット＝OffsetX/Y と同じ座標系）
         var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle);

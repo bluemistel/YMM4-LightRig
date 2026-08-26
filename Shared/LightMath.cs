@@ -101,6 +101,124 @@ public static class LightMath
         return t * t * (3f - 2f * t);
     }
 
+    /// <summary>
+    /// 同一チャンネルの複数光源をまとめた「実効的な光」。消費エフェクトはこれだけを見る。
+    /// ゆらぎと距離減衰は <see cref="Intensity"/> に織り込み済みなので、消費側で再度掛けないこと。
+    /// </summary>
+    public readonly struct ResolvedLight
+    {
+        /// <summary>立ち絵から光源へ向かうスクリーン方向（Y下, 正規化）。</summary>
+        public Vector2 Dir { get; init; }
+
+        /// <summary>寄与で重み付けした平均の光色。</summary>
+        public Vector4 Color { get; init; }
+
+        /// <summary>各光源の「強度 × ゆらぎ × 距離減衰」の合計。</summary>
+        public float Intensity { get; init; }
+
+        /// <summary>寄与で重み付けした平均の擬似高さ（Z）。</summary>
+        public float Height { get; init; }
+
+        /// <summary>
+        /// 光がどれだけ届いているか（0..1）。強度の大小に依存しない「届き具合」で、
+        /// 陰影の濃さや影の濃さのように<b>強度を掛けたくない</b>量へ使う。
+        /// </summary>
+        public float Reach { get; init; }
+
+        /// <summary>合成に使った光源の数（1 なら従来と完全に同じ結果になる）。</summary>
+        public int Count { get; init; }
+    }
+
+    /// <summary>
+    /// 同一チャンネルに置かれた複数の光源を1つの実効的な光へ合成する。
+    ///
+    /// <para>
+    /// 各光源の重みは <c>強度 × ゆらぎ × 距離減衰</c>。方向は重み付き平均、色と高さも重み付き平均、
+    /// 強度は合計にする。街灯が並ぶ道を歩くと、<b>近い街灯の重みが自然に大きくなる</b>ので、
+    /// 利用者がチャンネルを切り替えなくても受ける光が移り変わる。
+    /// </para>
+    ///
+    /// <para>
+    /// 【ゆらぎはタイムライン基準のフレームで計算すること】
+    /// アイテム内フレーム（<c>ItemPosition</c>）を使うと、開始位置の違う立ち絵どうしで
+    /// 同じ光源なのに明滅の位相がずれる。<paramref name="timelineFrame"/> には
+    /// <c>TimelinePosition.Frame</c> を渡す。
+    /// </para>
+    ///
+    /// <para>
+    /// 【正反対の光は打ち消し合う】方向の重み付き平均がゼロ付近になった場合は、
+    /// 最も寄与の大きい光源の向きへフォールバックする（向きが不定になるのを避ける）。
+    /// </para>
+    /// </summary>
+    public static bool Combine(
+        IReadOnlyList<LightState> lights, Vector2 itemWorld, long timelineFrame, int fps,
+        out ResolvedLight result)
+    {
+        result = default;
+        if (lights is null || lights.Count == 0)
+            return false;
+
+        Vector2 dirSum = default;
+        Vector3 colorSum = default;
+        float alphaSum = 0f, heightSum = 0f, totalWeight = 0f, nominalSum = 0f;
+
+        // 全部の光が届かなかった場合に色・高さ・向きを借りる「最も寄与の大きい光源」
+        var best = lights[0];
+        var bestDir = new Vector2(0f, -1f);
+        float bestWeight = -1f;
+
+        foreach (var light in lights)
+        {
+            var dir = ScreenDir(light, itemWorld);
+            float weight = MathF.Max(light.Intensity, 0f)
+                         * Flicker(timelineFrame, fps, light.FlickerAmount, light.FlickerSpeed, light.FlickerSeed)
+                         * Attenuation(light, itemWorld);
+
+            if (weight > bestWeight)
+            {
+                bestWeight = weight;
+                bestDir = dir;
+                best = light;
+            }
+
+            nominalSum += MathF.Max(light.Intensity, 0f);
+            dirSum += dir * weight;
+            colorSum += new Vector3(light.Color.X, light.Color.Y, light.Color.Z) * weight;
+            alphaSum += light.Color.W * weight;
+            heightSum += light.Height * weight;
+            totalWeight += weight;
+        }
+
+        float len = dirSum.Length();
+        var dirOut = len > 1e-4f ? dirSum / len : bestDir;
+
+        Vector4 colorOut;
+        float heightOut;
+        if (totalWeight > 1e-6f)
+        {
+            colorOut = new Vector4(colorSum / totalWeight, alphaSum / totalWeight);
+            heightOut = heightSum / totalWeight;
+        }
+        else
+        {
+            // どの光も届いていない。向き・色は最も近い（＝寄与が最大だった）光源のものを使い、
+            // 強度 0 で「当たっていない」ことを表す。消費側は強度で判断する。
+            colorOut = best.Color;
+            heightOut = best.Height;
+        }
+
+        result = new ResolvedLight
+        {
+            Dir = dirOut,
+            Color = colorOut,
+            Intensity = totalWeight,
+            Reach = nominalSum > 1e-6f ? Math.Clamp(totalWeight / nominalSum, 0f, 1f) : 0f,
+            Height = heightOut,
+            Count = lights.Count,
+        };
+        return true;
+    }
+
     /// <summary>スクリーン向きの方向ベクトルを角度（度）だけ回転する。正の角度で時計回り（Y下系）。</summary>
     public static Vector2 Rotate(Vector2 dir, float degrees)
     {

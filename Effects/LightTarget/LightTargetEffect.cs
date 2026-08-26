@@ -22,7 +22,9 @@ public enum LightFalloffMode
 }
 
 /// <summary>
-/// シーンに1つ置く「シーン光源」の発信役マーカーエフェクト。
+/// シーンに置く「シーン光源」の発信役マーカーエフェクト。
+/// <b>同じチャンネルにいくつ置いてもよい。</b>消費側は距離減衰を重みにして全部を合成するので、
+/// 街灯が並ぶ道のような構図でも、チャンネルを切り替えずに近い光源から強く光を受けられる。
 /// 映像には一切手を加えず、自アイテムのワールド座標＋オフセットと光色・強度・ゆらぎ係数を
 /// 毎フレーム共有ストア（<see cref="LightSignalStore"/>）へ発信する。
 /// 同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を自動参照する。
@@ -45,7 +47,7 @@ public class LightTargetEffect : VideoEffectBase
 {
     public override string Label => "シーン光源ターゲット";
 
-    [Display(GroupName = "光源", Name = "チャンネル", Description = "同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を参照する")]
+    [Display(GroupName = "光源", Name = "チャンネル", Description = "同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を参照する。同じチャンネルに複数の光源を置くと、距離減衰を重みにして合成される")]
     [EnumComboBox]
     public LightChannel Channel { get => channel; set => Set(ref channel, value); }
     LightChannel channel = LightChannel.Ch1;

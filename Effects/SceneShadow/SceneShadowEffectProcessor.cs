@@ -100,13 +100,13 @@ internal sealed class SceneShadowEffectProcessor : VideoEffectProcessorBase
         float lightHeight = 200f; // 光源が無い時の既定の高さ
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
             lightHeight = light.Height;
             // 光が届かない位置なら影も落ちない
-            opacity *= LightMath.Attenuation(light, itemPos);
+            opacity *= light.Reach;
         }
         else
         {
