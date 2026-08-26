@@ -14,7 +14,7 @@
     <Version>1.0.0</Version>
     <Authors>bluemistel</Authors>
     <Product>LightRig</Product>
-    <Description>シーンに1つ置いた仮想光源を全エフェクトが自動参照する YMM4 ライティングプラグイン。リムライト・シェーディング・逆光・リライティング・落とし影・空気遠近・背景なじませを一括で連動させる。</Description>
+    <Description>シーンに1つ置いた仮想光源を全エフェクトが自動参照する YMM4 ライティングプラグイン。リムライト・シェーディング・受光・逆光・落とし影・空気遠近・背景なじませを一括で連動させる。</Description>
     <NeutralLanguage>ja-JP</NeutralLanguage>
   </PropertyGroup>
 
