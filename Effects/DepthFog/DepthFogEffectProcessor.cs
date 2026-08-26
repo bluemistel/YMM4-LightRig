@@ -97,7 +97,8 @@ internal sealed class DepthFogEffectProcessor : VideoEffectProcessorBase
         var ambientMix = (float)(_item.AmbientMix.GetValue(frame, length, fps) / 100.0);
         if (_item.AmbientChannel != LightChannelOrOff.Off && ambientMix > 0f
             && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage,
-                                         (LightChannel)_item.AmbientChannel, out var ambient))
+                                         (LightChannel)_item.AmbientChannel,
+                                         effectDescription.TimelinePosition.Frame, out var ambient))
         {
             fog = Vector3.Lerp(fog, new Vector3(ambient.X, ambient.Y, ambient.Z), ambientMix);
         }

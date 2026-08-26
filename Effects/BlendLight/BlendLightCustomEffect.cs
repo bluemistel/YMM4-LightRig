@@ -43,6 +43,10 @@ public sealed class BlendLightCustomEffect : D2D1CustomShaderEffectBase
         FallbackR,
         FallbackG,
         FallbackB,
+        // グリッド（CellBase..CellBase+26）の後ろに続く
+        Method = CellBase + 27,
+        ToneStrength,
+        LumaMatch,
     }
 
     public float LightDirX  { set => SetValue((int)PropertyIndex.LightDirX, value); }
@@ -61,6 +65,9 @@ public sealed class BlendLightCustomEffect : D2D1CustomShaderEffectBase
     public float FallbackR  { set => SetValue((int)PropertyIndex.FallbackR, value); }
     public float FallbackG  { set => SetValue((int)PropertyIndex.FallbackG, value); }
     public float FallbackB  { set => SetValue((int)PropertyIndex.FallbackB, value); }
+    public float Method       { set => SetValue((int)PropertyIndex.Method, value); }
+    public float ToneStrength { set => SetValue((int)PropertyIndex.ToneStrength, value); }
+    public float LumaMatch    { set => SetValue((int)PropertyIndex.LumaMatch, value); }
 
     /// <summary>背景グリッドの i 番目（row-major）のセル色を設定する。</summary>
     public void SetCell(int i, Vector3 color)
@@ -204,6 +211,15 @@ public sealed class BlendLightCustomEffect : D2D1CustomShaderEffectBase
         [CustomEffectProperty(PropertyType.Float, CellBase + 26)]
         public float C8B { get => _cb.C8B; set { _cb.C8B = value; UpdateConstants(); } }
 
+        [CustomEffectProperty(PropertyType.Float, (int)PropertyIndex.Method)]
+        public float Method { get => _cb.Method; set { _cb.Method = value; UpdateConstants(); } }
+
+        [CustomEffectProperty(PropertyType.Float, (int)PropertyIndex.ToneStrength)]
+        public float ToneStrength { get => _cb.ToneStrength; set { _cb.ToneStrength = value; UpdateConstants(); } }
+
+        [CustomEffectProperty(PropertyType.Float, (int)PropertyIndex.LumaMatch)]
+        public float LumaMatch { get => _cb.LumaMatch; set { _cb.LumaMatch = value; UpdateConstants(); } }
+
         public EffectImpl() : base(ShaderResourceLoader.Get("BlendLightPS.cso")) { }
 
         protected override void UpdateConstants()
@@ -241,7 +257,7 @@ public sealed class BlendLightCustomEffect : D2D1CustomShaderEffectBase
                 outputRect.Left - r, outputRect.Top - r, outputRect.Right + r, outputRect.Bottom + r);
         }
 
-        // HLSL の cbuffer と型・順序・並びを厳密に一致させること（float 48個 = 192byte, 16byte境界OK）。
+        // HLSL の cbuffer と型・順序・並びを厳密に一致させること（float 52個 = 208byte, 16byte境界OK）。
         [StructLayout(LayoutKind.Sequential)]
         private struct ConstantBuffer
         {
@@ -259,7 +275,8 @@ public sealed class BlendLightCustomEffect : D2D1CustomShaderEffectBase
             public float C6R, C6G, C6B;
             public float C7R, C7G, C7B;
             public float C8R, C8G, C8B;
-            public float Pad;
+            public float Method, ToneStrength, LumaMatch;
+            public float Pad0, Pad1;
         }
     }
 }

@@ -88,7 +88,8 @@ internal sealed class RelightingEffectProcessor : VideoEffectProcessorBase
         float sceneMul = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var light))
+            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, out var light))
         {
             dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
             lightZ = Math.Clamp(light.Height / 400f, 0.05f, 4f);
@@ -99,7 +100,8 @@ internal sealed class RelightingEffectProcessor : VideoEffectProcessorBase
 
             // 環境光サンプラーの背景色を影色へ混ぜて背景と馴染ませる（連動時のみ）
             if (ambientMix > 0f
-                && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var ambient))
+                && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                    effectDescription.TimelinePosition.Frame, out var ambient))
             {
                 shadowColor = Vector3.Lerp(shadowColor, new Vector3(ambient.X, ambient.Y, ambient.Z), ambientMix);
             }

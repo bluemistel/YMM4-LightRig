@@ -6,6 +6,7 @@ using YukkuriMovieMaker.Exo;
 using YukkuriMovieMaker.Player.Video;
 using YukkuriMovieMaker.Plugin;
 using YukkuriMovieMaker.Plugin.Effects;
+using YukkuriMovieMaker.ItemEditor.CustomVisibilityAttributes;
 using LightRig.Shared;
 
 namespace LightRig.Effects.BlendLight;
@@ -13,8 +14,26 @@ namespace LightRig.Effects.BlendLight;
 /// <summary>光の乗せ方。</summary>
 public enum BlendLightMode
 {
-    [Display(Name = "グラデーション")] Gradient = 0,
-    [Display(Name = "縁取り")] Edge = 1,
+    [Display(Name = "グラデーション", Description = "光源方向に沿って面で染める。光源の向きが必要")]
+    Gradient = 0,
+
+    [Display(Name = "縁取り", Description = "光源側の輪郭だけを染める。光源の向きが必要")]
+    Edge = 1,
+
+    [Display(Name = "全体", Description = "被写体全体へ均一に背景色を乗せる。光源を置かずに背景へ馴染ませたいときはこれ")]
+    Uniform = 2,
+}
+
+/// <summary>背景色の乗せ方（合成の方式）。</summary>
+public enum BlendLightMethod
+{
+    [Display(Name = "色調同化",
+        Description = "背景の色味を乗算で移し、明るさは別枠で背景へ寄せる。合成モードの手動切り替えが要らない")]
+    ToneMatch = 1,
+
+    [Display(Name = "光を重ねる",
+        Description = "背景色の光レイヤーをぼかして合成モードで重ねる。加算・スクリーンで発光感を出したいとき")]
+    Layer = 0,
 }
 
 /// <summary>背景色をどう引くか。</summary>
@@ -31,57 +50,84 @@ public enum BlendLightColorSource
 /// 「位置に応じた色」を選ぶと、背景を 3x3 に区切った色グリッドを被写体の位置で補間して使うため、
 /// 頭には空の色、足元には地面の色というように場所ごとに違う背景色が乗る。
 ///
-/// 光源方向は同じチャンネルの「シーン光源ターゲット」に追従する。
-/// チャンネル=無効、または光源・環境光が無い場合は手動の角度・固定色で単体エフェクトとして機能する。
+/// <b>必要なのは「環境光サンプラー」だけ</b>で、シーン光源ターゲットは任意。
+/// 光源があれば「どちら側から光が当たっているか」を反映できるが、
+/// 光源を置きたくない場合はモード＝全体にすれば向きを使わず背景色を均一に乗せる。
+/// チャンネル=無効、または環境光が無い場合は固定色で単体エフェクトとして機能する。
 /// </summary>
 [PluginDetails(AuthorName = "bluemistel")]
 [VideoEffect(
-    "背景なじませ(光源連動)",
+    "背景なじませ(環境光連動)",
     ["LightRig"],
     ["背景なじませ", "なじませ", "馴染ませ", "環境光", "ambient", "blend", "背景", "シーン光源", "立ち絵"],
     IsAviUtlSupported = false)]
 public class BlendLightEffect : VideoEffectBase
 {
-    public override string Label => "背景なじませ(光源連動)";
+    public override string Label => "背景なじませ(環境光連動)";
 
-    [Display(GroupName = "連動", Name = "チャンネル", Description = "同じチャンネルの「シーン光源ターゲット」「環境光サンプラー」に追従する。無効で単体動作")]
+    [Display(GroupName = "連動", Name = "チャンネル", Description = "同じチャンネルの「環境光サンプラー」から背景色を受け取る（必須）。「シーン光源ターゲット」があれば光の向きも使う（任意）。無効で単体動作")]
     [EnumComboBox]
     public LightChannelOrOff Channel { get => channel; set => Set(ref channel, value); }
     LightChannelOrOff channel = LightChannelOrOff.Ch1;
 
-    [Display(GroupName = "連動", Name = "角度オフセット", Description = "光源方向への補正角（度）。連動無効時は絶対角（0=上）")]
+    [Display(GroupName = "連動", Name = "角度オフセット", Description = "光源方向への補正角（度）。光源が無い場合は絶対角（0=上）。モード＝全体では使いません")]
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation AngleOffset { get; } = new Animation(0, -360, 360);
 
-    [Display(GroupName = "なじませ", Name = "モード", Description = "グラデーション=光源側を面で染める / 縁取り=光源側の輪郭だけを染める")]
+    [Display(GroupName = "なじませ", Name = "モード", Description = "グラデーション=光源側を面で染める / 縁取り=光源側の輪郭だけを染める / 全体=向きを使わず均一に乗せる")]
     [EnumComboBox]
     public BlendLightMode Mode { get => mode; set => Set(ref mode, value); }
     BlendLightMode mode = BlendLightMode.Gradient;
+
+    [Display(GroupName = "なじませ", Name = "方式",
+        Description = "色調同化=背景の色味を乗算で移し明るさを別枠で合わせる（既定）/ 光を重ねる=光レイヤーを合成モードで重ねる")]
+    [EnumComboBox]
+    public BlendLightMethod Method { get => method; set => Set(ref method, value); }
+    BlendLightMethod method = BlendLightMethod.ToneMatch;
 
     [Display(GroupName = "なじませ", Name = "強さ", Description = "背景色を乗せる量")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Intensity { get; } = new Animation(60, 0, 100);
 
     [Display(GroupName = "なじませ", Name = "広がり", Description = "グラデーションが被写体のどこまで回り込むか（100%で全体）")]
+    [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Gradient)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Spread { get; } = new Animation(70, 0, 100);
 
     [Display(GroupName = "なじませ", Name = "縁幅", Description = "縁取りモードで染める縁の太さ（px）")]
+    [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Edge)]
     [AnimationSlider("F1", "px", 1, 50)]
     public Animation RimWidth { get; } = new Animation(10, 1, 500);
 
     [Display(GroupName = "なじませ", Name = "締まり", Description = "縁取りモードの縁の締まり（0=くっきり, 100=柔らかい）")]
+    [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Edge)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Softness { get; } = new Animation(0, 0, 100);
 
+    [Display(GroupName = "色調同化", Name = "色味の同化", Description = "背景の色味をどれだけ乗算で移すか。明るさは変えません")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.ToneMatch)]
+    [AnimationSlider("F0", "%", 0, 100)]
+    public Animation ToneStrength { get; } = new Animation(70, 0, 100);
+
+    [Display(GroupName = "色調同化", Name = "明るさ合わせ", Description = "背景の明るさへどれだけ寄せるか。乗算で暗くなりすぎた分をここで戻します")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.ToneMatch)]
+    [AnimationSlider("F0", "%", 0, 100)]
+    public Animation LumaMatch { get; } = new Animation(40, 0, 100);
+
     [Display(GroupName = "なじませ", Name = "ぼかし量", Description = "乗せる光のぼかし（px）。大きいほど柔らかく馴染む")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.Layer)]
     [AnimationSlider("F1", "px", 0, 100)]
     public Animation Blur { get; } = new Animation(20, 0, 1000);
 
-    [Display(GroupName = "なじませ", Name = "合成モード", Description = "元画像との合成方法")]
+    [Display(GroupName = "なじませ", Name = "合成モード",
+        Description = "ソフトライト=明暗に応じて自動で寄る / 通常=アルファブレンド / カラー=明るさを保ち色味だけ移す / スクリーン・加算=明るくするだけ / 乗算=暗くするだけ")]
+    [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.Layer)]
     [EnumComboBox]
     public YukkuriMovieMaker.Project.Blend BlendMode { get => blendMode; set => Set(ref blendMode, value); }
-    YukkuriMovieMaker.Project.Blend blendMode = YukkuriMovieMaker.Project.Blend.Screen;
+    // 既定はソフトライト。スクリーンや加算は「明るくする」ことしかできないため、
+    // 夕焼けのような暗く寄せたい背景では手動で乗算へ切り替える必要があった。
+    // ソフトライトは背景色の明暗に応じて自動的に明暗どちらへも寄るので切り替えが要らない。
+    YukkuriMovieMaker.Project.Blend blendMode = YukkuriMovieMaker.Project.Blend.SoftLight;
 
     [Display(GroupName = "背景色", Name = "色の取得", Description = "位置に応じた色=背景を3x3に区切って被写体の位置で補間 / 代表色=背景全体の明るい部分の平均色")]
     [EnumComboBox]
@@ -102,14 +148,17 @@ public class BlendLightEffect : VideoEffectBase
     Color localColor = Color.FromArgb(255, 200, 210, 230);
 
     [Display(GroupName = "背景の対応付け", Name = "範囲倍率", Description = "被写体が背景のどれだけの広さを参照するか。小さくすると色の変化が緩やかになる")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), BlendLightColorSource.Grid)]
     [AnimationSlider("F0", "%", 10, 400)]
     public Animation RangeScale { get; } = new Animation(100, 1, 1000);
 
     [Display(GroupName = "背景の対応付け", Name = "位置オフセットX", Description = "背景を参照する位置の横方向の補正（px）")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), BlendLightColorSource.Grid)]
     [AnimationSlider("F0", "px", -1000, 1000)]
     public Animation OffsetX { get; } = new Animation(0, -10000, 10000);
 
     [Display(GroupName = "背景の対応付け", Name = "位置オフセットY", Description = "背景を参照する位置の縦方向の補正（px）")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), BlendLightColorSource.Grid)]
     [AnimationSlider("F0", "px", -1000, 1000)]
     public Animation OffsetY { get; } = new Animation(0, -10000, 10000);
 
@@ -123,5 +172,6 @@ public class BlendLightEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, Intensity, Spread, RimWidth, Softness, Blur, Saturation, Gain, RangeScale, OffsetX, OffsetY];
+        => [AngleOffset, Intensity, Spread, RimWidth, Softness, Blur, ToneStrength, LumaMatch,
+            Saturation, Gain, RangeScale, OffsetX, OffsetY];
 }

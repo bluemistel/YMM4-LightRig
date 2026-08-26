@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Numerics;
 using YukkuriMovieMaker.Player.Video;
 
@@ -22,6 +21,13 @@ public readonly struct AmbientState
 {
     /// <summary>グリッドの1辺のセル数。</summary>
     public const int GridSize = 3;
+
+    /// <summary>
+    /// 実際に読み戻しを行ったフレーム。サンプリングは数フレームおきに間引くため、
+    /// この値を配っているフレーム（ストアのキー）とは一致しないことがある。
+    /// 選択には使わない（ストア側がフレームをキーに持つ）。診断・将来の補間用の記録。
+    /// </summary>
+    public long Frame { get; init; }
 
     /// <summary>代表色（輝度しきい値以上の画素の平均, 非プリマルチプライド sRGB 0..1）。</summary>
     public Vector4 Color { get; init; }
@@ -48,52 +54,24 @@ public readonly struct AmbientState
 /// 光源の位置・色を扱う <see cref="LightSignalStore"/> とは別系統にして、
 /// 環境光サンプラーと光源ターゲットが同じチャンネルを使っても互いを上書きしないようにする。
 ///
-/// 構造・Usage フォールバックの考え方は <see cref="LightSignalStore"/> と同じ。
+/// 選択規則・Usage/フレームまわりの注意は <see cref="FrameSignalStore{T}"/> を参照。
 /// </summary>
 internal static class AmbientSignalStore
 {
-    static long sequence;
+    static readonly FrameSignalStore<AmbientState> store = new();
 
-    static readonly ConcurrentDictionary<
-        (Guid SceneId, LightChannel Channel),
-        ConcurrentDictionary<TimelineSourceUsage, (long Seq, AmbientState State)>> signals = new();
+    /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
+    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, in AmbientState state)
+        => store.Publish(sceneId, usage, channel, frame, state);
 
-    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, AmbientState state)
-    {
-        var perUsage = signals.GetOrAdd((sceneId, channel), _ => new());
-        perUsage[usage] = (Interlocked.Increment(ref sequence), state);
-    }
-
-    public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, out AmbientState state)
-    {
-        state = default;
-        if (!signals.TryGetValue((sceneId, channel), out var perUsage))
-            return false;
-
-        if (perUsage.TryGetValue(usage, out var exact))
-        {
-            state = exact.State;
-            return true;
-        }
-
-        var found = false;
-        long bestSeq = -1;
-        foreach (var entry in perUsage.Values)
-        {
-            if (entry.Seq > bestSeq)
-            {
-                bestSeq = entry.Seq;
-                state = entry.State;
-                found = true;
-            }
-        }
-        return found;
-    }
+    /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
+    public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out AmbientState state)
+        => store.TryGet(sceneId, usage, channel, frame, out state);
 
     /// <summary>代表色だけが必要な消費側（リライティングの環境光ミックス等）向けの簡易版。</summary>
-    public static bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, out Vector4 color)
+    public static bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out Vector4 color)
     {
-        if (TryGetState(sceneId, usage, channel, out var state))
+        if (TryGetState(sceneId, usage, channel, frame, out var state))
         {
             color = state.Color;
             return true;

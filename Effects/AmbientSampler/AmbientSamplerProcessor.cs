@@ -33,7 +33,13 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     private ID2D1DeviceContext? _dc;
     private ID2D1Bitmap1? _target;   // 描画先（NxN, Target）
     private ID2D1Bitmap1? _staging;  // 読み戻し用（NxN, CpuRead）
-    private bool _disabled;
+
+    // 読み戻しの失敗は「永久停止」にしない。一度の失敗で二度と測らなくなると、
+    // 古い色を配り続けたまま復帰できず、原因も分からない状態になるため
+    // （実際に「停止すると古い環境光のまま固まる」不具合の候補になった）。
+    // 失敗するたびに間隔を空けて再挑戦する（例外の連発は避けつつ復帰はできる）。
+    private int _failureCount;
+    private long _retryAfterFrame = long.MinValue;
 
     private long _lastSampledFrame = long.MinValue;
     private Vector4 _lastColor = new(0.5f, 0.5f, 0.5f, 1f);
@@ -60,9 +66,29 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             return drawDesc;
 
         long frame = desc.TimelinePosition.Frame;
-        int interval = Math.Max(1, _item.SampleInterval);
+        // 間隔はミリ秒指定。プロジェクトの FPS に合わせてフレーム数へ換算する
+        // （フレーム単位で持つと 30fps と 60fps で追従速度が変わってしまう）。
+        int fps = Math.Max(1, desc.FPS);
+        int interval = Math.Max(1, (int)Math.Round(fps * _item.SampleIntervalMs / 1000.0));
 
-        if (!_disabled && (!_hasColor || Math.Abs(frame - _lastSampledFrame) >= interval))
+        // 間引き（SampleInterval）は「連続再生で少しずつ前へ進む」ときだけの最適化。
+        // 巻き戻しシークは内容が変わった可能性が高いので即座に測り直す。
+        // これをしないと、真夜中→夕方へ1フレームずつ戻したとき
+        // 差分が interval に達するまで（既定5フレーム）古い色が出続ける。
+        //
+        // 【差分の計算は _hasColor が true のときだけ行うこと】
+        // _lastSampledFrame の初期値は long.MinValue なので、frame=0（タイムライン先頭へ
+        // ショートカットで飛んだ場合など）だと frame - long.MinValue が long.MinValue に
+        // オーバーフローし、Math.Abs が OverflowException を投げてプレビューが落ちる。
+        var needSample = !_hasColor;
+        if (!needSample)
+        {
+            long delta = frame - _lastSampledFrame; // 双方とも実在のフレームなので安全
+            needSample = delta < 0 || delta >= interval;
+        }
+
+        var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
+        if (canTry && needSample)
         {
             if (TrySample(out var color, out var grid, out var localSize))
             {
@@ -71,6 +97,13 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
                 _lastLocalSize = localSize;
                 _hasColor = true;
                 _lastSampledFrame = frame;
+                _failureCount = 0;
+            }
+            else
+            {
+                // 失敗回数に応じて再挑戦までの間隔を伸ばす（最大 600 フレーム）
+                _failureCount++;
+                _retryAfterFrame = frame + Math.Min(_failureCount, 10) * 60;
             }
         }
 
@@ -80,8 +113,10 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         if (_hasColor)
         {
             var min = SceneRect(drawDesc, out var size);
-            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, new AmbientState
+            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, frame, new AmbientState
             {
+                // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。
+                Frame = _lastSampledFrame,
                 Color = _lastColor,
                 Grid = _lastGrid,
                 RectMin = min,
@@ -145,7 +180,7 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             var map = _staging.Map(MapOptions.Read);
             try
             {
-                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);
+                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);  // 0..1 の相対しきい値
             }
             finally
             {
@@ -155,8 +190,7 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         }
         catch
         {
-            // 一度でも失敗したら以降は試みない（例外の連発を避ける）
-            _disabled = true;
+            // リソースを作り直せば復帰することがあるので、破棄だけして次の機会に再挑戦する
             DisposeResources();
             return false;
         }
@@ -165,9 +199,15 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     /// <summary>
     /// 縮小画像から代表色と色グリッドを求める。
     ///
-    /// 代表色は「輝度が threshold 以上の画素だけの平均」。建物・木・道路といった暗色に引きずられず、
-    /// 空・光源・明部＝実際に光を投げている部分を環境光として取り出すため。
-    /// しきい値を超える画素が無ければ全画素平均へフォールバックする（真っ暗な背景でも破綻しない）。
+    /// 代表色は「輝度が明部基準の threshold 以上の画素だけの平均」。建物・木・道路といった暗色に
+    /// 引きずられず、空・光源・明部＝実際に光を投げている部分を環境光として取り出すため。
+    ///
+    /// 【しきい値は絶対値ではなく「画面内の最大輝度に対する相対値」にすること】
+    /// 絶対値だと、0% は全画素平均・100% は該当画素ゼロで全画素平均へフォールバックとなり、
+    /// <b>スライダーの両端が同じ結果</b>になる（実機で判明）。さらに夜景のように全体が暗い背景では
+    /// どんな値でも該当画素が無く、常にフォールバックしていた。
+    /// 最大輝度を基準にすれば 0→100% が単調に「全体の平均 → 最も明るい部分の色」へ変化し、
+    /// 明るい背景でも暗い背景でも同じ感覚で効く。
     ///
     /// 一方グリッドは「その場所の背景色」が欲しいのでしきい値を掛けない。
     /// 不透明画素が1つも無いセルは代表色で埋め、対応付けがずれても破綻しないようにする。
@@ -184,6 +224,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         var cellSum = new Vector3[G * G];
         var cellCount = new int[G * G];
 
+        // 1パス目: グリッドと全画素平均を作りつつ、最大輝度を求める（相対しきい値の基準）
+        float maxLum = 0f;
         for (int y = 0; y < N; y++)
         {
             byte* row = p + y * pitch;
@@ -201,17 +243,36 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
                 float r = px[2] / 255f / pa;
 
                 allR += r; allG += g; allB += b; allA += pa; allCount++;
-
-                float lum = 0.299f * r + 0.587f * g + 0.114f * b;
-                if (lum >= threshold)
-                {
-                    selR += r; selG += g; selB += b; selA += pa; selCount++;
-                }
+                maxLum = MathF.Max(maxLum, 0.299f * r + 0.587f * g + 0.114f * b);
 
                 int gx = Math.Min(x * G / N, G - 1);
                 int gi = gy * G + gx;
                 cellSum[gi] += new Vector3(r, g, b);
                 cellCount[gi]++;
+            }
+        }
+
+        // 2パス目: 最大輝度を基準にした相対しきい値で代表色を作る。
+        // しきい値100%でも最大輝度の画素自身は必ず残るので、両端が同じ結果になることはない。
+        float absThreshold = maxLum * Math.Clamp(threshold, 0f, 1f);
+        for (int y = 0; y < N; y++)
+        {
+            byte* row = p + y * pitch;
+            for (int x = 0; x < N; x++)
+            {
+                byte* px = row + x * 4;
+                float pa = px[3] / 255f;
+                if (pa <= 1e-4f)
+                    continue;
+
+                float b = px[0] / 255f / pa;
+                float g = px[1] / 255f / pa;
+                float r = px[2] / 255f / pa;
+
+                if (0.299f * r + 0.587f * g + 0.114f * b >= absThreshold)
+                {
+                    selR += r; selG += g; selB += b; selA += pa; selCount++;
+                }
             }
         }
 

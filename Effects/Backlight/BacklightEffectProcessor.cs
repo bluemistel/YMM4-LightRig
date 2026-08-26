@@ -134,7 +134,8 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
         float lightIntensity = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel, out var light))
+            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, out var light))
         {
             dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
             effR = float.Lerp(local.R / 255f, light.Color.X, colorMix);
