@@ -228,7 +228,7 @@ return drawDesc with { Controllers = cachedControllers };
 - ✅ **M5**: `Shared\AmbientSignalStore.cs`、`Effects\AmbientSampler\{Effect,Processor}.cs`（GPU読み戻し）。**Phase 2 完了。**
 - ✅ **M6**: `Effects\SceneShadow\`（3クラス＋`Shaders\SceneShadowPS.hlsl`）。落とし影。
 - ✅ **M7**: `Effects\DepthFog\`（3クラス＋`Shaders\DepthFogPS.hlsl`）。空気遠近。
-- ✅ **M8**: `Effects\BlendLight\`（3クラス＋`Shaders\BlendLightPS.hlsl`）＋ `AmbientSignalStore` のグリッド拡張。背景なじませ。
+- ✅ **M8**: `Effects\BlendLight\`（3クラス＋`Shaders\BlendLightPS.hlsl`）＋ `AmbientSignalStore` のグリッド拡張。背景なじませ。既定は「色調同化」方式。
 - ✅ **M9**: `LightTarget` に環境光サンプラーへの色・明るさ追従を追加。光源1つでシーン全体が背景の明るさへ揃う。
 - ✅ **M10**: 光源の種類（点光源/平行光/スポット）と距離減衰。`LightMath.ScreenDir` / `Attenuation` に集約し、消費側6箇所は1行ずつ。プレビューに到達範囲の円・円錐を追加。
 
