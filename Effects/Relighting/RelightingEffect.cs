@@ -35,12 +35,16 @@ public enum RelightingPreset
 /// シーン光源に連動するリライティング。アルファのシルエットから擬似法線を作り、
 /// 光色で 2 トーン + ハイライトのライティングをし直す（内部ディテールを拾わずシワが出ない）。
 /// プリセット（夕日/室内灯/月明かり/炎）でルックを一括設定でき、光源色は連動で上書き・ミックス可能。
+///
+/// <b>色を「掛ける」処理なので、既定（受光量100%）では明るくならない。</b>
+/// たき火を立ち絵の前面に置くような「光を受けて明るくなる」表現には受光量を上げる。
+/// 100% を超えると光色が 1 を超え、乗算が明るくする方向へ転じる。
 /// </summary>
 [PluginDetails(AuthorName = "bluemistel")]
 [VideoEffect(
     "リライティング(光源連動)",
     ["LightRig"],
-    ["リライティング", "relighting", "ライティング", "陰影", "夕日", "シーン光源"],
+    ["リライティング", "relighting", "ライティング", "陰影", "夕日", "シーン光源", "受光", "照らす"],
     IsAviUtlSupported = false)]
 public class RelightingEffect : VideoEffectBase
 {
@@ -63,6 +67,11 @@ public class RelightingEffect : VideoEffectBase
     [Display(GroupName = "リライティング", Name = "強さ", Description = "元画像とリライト結果のミックス")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Intensity { get; } = new Animation(80, 0, 100);
+
+    [Display(GroupName = "リライティング", Name = "受光量",
+        Description = "光の当たる側をどれだけ明るくするか。100%は色が付くだけで明るくならず、上げるほど実際に照らされた見た目になる（たき火を前面に置く場合など）")]
+    [AnimationSlider("F0", "%", 0, 300)]
+    public Animation LightGain { get; } = new Animation(100, 0, 1000);
 
     [Display(GroupName = "リライティング", Name = "フォルム", Description = "擬似法線を取るスケール（px）。大きいほど大きな面で滑らか")]
     [AnimationSlider("F1", "px", 1, 100)]
@@ -116,5 +125,5 @@ public class RelightingEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, Intensity, FormScale, Blur, ColorMix, AmbientMix, Diffuse, Highlight, Shininess, Wrap];
+        => [AngleOffset, Intensity, LightGain, FormScale, Blur, ColorMix, AmbientMix, Diffuse, Highlight, Shininess, Wrap];
 }

@@ -4,6 +4,10 @@
 // 法線はアルファ勾配ベースなので内部ディテール（服の柄・髪）を拾わずシワが出ない。
 //
 // 入力・出力ともプリマルチプライドアルファ。オフセットサンプリングのため矩形を拡張すること。
+//
+// 【この処理は乗算なので、光色が 1 以下だと明るくならない】
+// relit = rgb * tone なので、tone（=光色）が最大 1 のままでは元画素以下にしかならず
+// 「色が付くだけ」になる。C# 側の受光量で光色を 1 超へ持ち上げて初めて照らされた見た目になる。
 
 Texture2D    InputTexture : register(t0);
 SamplerState InputSampler : register(s0);
@@ -100,5 +104,10 @@ float4 main(float4 pos : SV_POSITION,
     relit += lightCol * h;
 
     float3 outRgb = lerp(rgb, relit, saturate(intensity));
+
+    // 受光量を上げると tone が 1 を超えて relit も 1 を超えうる。
+    // そのまま a を掛けると rgb > a となり、プリマルチプライドとして不正な値になる
+    // （半透明の髪の縁などで合成が破綻する）。表示できる範囲へ丸めてから premultiply する。
+    outRgb = saturate(outRgb);
     return float4(outRgb * a, a); // 再プリマルチプライ
 }

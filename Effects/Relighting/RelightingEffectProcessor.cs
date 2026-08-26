@@ -76,6 +76,7 @@ internal sealed class RelightingEffectProcessor : VideoEffectProcessorBase
         var blur = (float)_item.Blur.GetValue(frame, length, fps);
         var colorMix = (float)(_item.ColorMix.GetValue(frame, length, fps) / 100.0);
         var ambientMix = (float)(_item.AmbientMix.GetValue(frame, length, fps) / 100.0);
+        var lightGain = (float)(_item.LightGain.GetValue(frame, length, fps) / 100.0);
 
         var look = ResolveLook(frame, length, fps);
         var shadowColor = look.ShadowColor;
@@ -110,8 +111,10 @@ internal sealed class RelightingEffectProcessor : VideoEffectProcessorBase
             colorMix = 0f; // 連動していないのでシーン光源色は使わない
         }
 
-        // プリセット/手動の光色 ↔ シーン光源色 をミックスし、光源強度（ゆらぎ込み）を掛ける
-        var effLight = Vector3.Lerp(look.LightColor, sceneColor, colorMix) * sceneMul;
+        // プリセット/手動の光色 ↔ シーン光源色 をミックスし、光源強度（ゆらぎ込み）と受光量を掛ける。
+        // 光色は最大 1 なので、受光量 100% のままだと rgb * tone が必ず元画素以下になり
+        // 「色が付くだけで明るくならない」。1 を超えさせて初めて照らされた見た目になる。
+        var effLight = Vector3.Lerp(look.LightColor, sceneColor, colorMix) * sceneMul * lightGain;
 
         var cur = new ConstantValues(
             dir.X, dir.Y, lightZ, formScale, look.Wrap,
