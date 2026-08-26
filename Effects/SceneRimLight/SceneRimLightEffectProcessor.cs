@@ -23,12 +23,14 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
     private readonly SceneRimLightEffect _item;
     private SceneRimLightCustomEffect? _rim;
     private D2DEffects.GaussianBlur? _blur;
+    private D2DEffects.GaussianBlur? _silhouette; // 入力1へ渡すシルエットのぼかし
     private D2DEffects.Composite? _composite;
     private D2DEffects.Blend? _blend;
     private D2DEffects.CrossFade? _crossFade;
 
     private bool _isFirst = true;
     private float _lastDirX, _lastDirY, _lastRimWidth, _lastSoftness, _lastBlur, _lastWeight;
+    private float _lastSilhouette = -1f, _lastEdgeMode = -1f;
     private float _lastR = -1, _lastG = -1, _lastB = -1;
     private YukkuriMovieMaker.Project.Blend _lastBlendMode;
 
@@ -50,6 +52,13 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
             return null;
         }
         disposer.Collect(_rim);
+
+        // 入力1: 元画像をガウスぼかししたシルエット。
+        // 未接続の入力があると描画できないので、方式に関わらず必ず繋いでおく。
+        _silhouette = new D2DEffects.GaussianBlur(dc);
+        disposer.Collect(_silhouette);
+        using (var silhouetteOut = _silhouette.Output)
+            _rim.SetInput(1, silhouetteOut, true);
 
         _blur = new D2DEffects.GaussianBlur(dc);
         disposer.Collect(_blur);
@@ -77,6 +86,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
     protected override void setInput(ID2D1Image? input)
     {
         _rim?.SetInput(0, input, true);
+        _silhouette?.SetInput(0, input, true);
         _composite?.SetInput(0, input, true);
         _blend?.SetInput(0, input, true);
         _crossFade?.SetInput(1, input, true);
@@ -85,6 +95,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
     protected override void ClearEffectChain()
     {
         _rim?.SetInput(0, null, true);
+        _silhouette?.SetInput(0, null, true);
         _composite?.SetInput(0, null, true);
         _composite?.SetInput(1, null, true);
         _blend?.SetInput(0, null, true);
@@ -95,7 +106,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
 
     public override DrawDescription Update(EffectDescription effectDescription)
     {
-        if (IsPassThroughEffect || _rim is null || _blur is null
+        if (IsPassThroughEffect || _rim is null || _blur is null || _silhouette is null
             || _composite is null || _blend is null || _crossFade is null)
             return effectDescription.DrawDescription;
 
@@ -110,6 +121,9 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
         var softness = (float)(_item.Softness.GetValue(frame, length, fps) / 100.0);
         var localIntensity = (float)(_item.Intensity.GetValue(frame, length, fps) / 100.0);
         var colorMix = (float)(_item.ColorMix.GetValue(frame, length, fps) / 100.0);
+        var colorTune = (float)(_item.ColorTune.GetValue(frame, length, fps) / 100.0);
+        var silhouetteBlur = (float)_item.SilhouetteBlur.GetValue(frame, length, fps);
+        var edgeMode = (float)(int)_item.EdgeMode;
         var local = _item.LocalColor;
 
         // --- 光源の解決（連動 or 単体） ---
@@ -123,10 +137,22 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
                 effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
-            // 光源色と固定色をミックス
-            effR = float.Lerp(local.R / 255f, light.Color.X, colorMix);
-            effG = float.Lerp(local.G / 255f, light.Color.Y, colorMix);
-            effB = float.Lerp(local.B / 255f, light.Color.Z, colorMix);
+
+            // 色源の解決。背景色を選んだ場合は環境光サンプラーから取り、
+            // そのままだと暗い背景で暗い縁光になるので「光源らしい色」へ整形する。
+            var source = new Vector3(light.Color.X, light.Color.Y, light.Color.Z);
+            if (_item.ColorSource == RimColorSource.Ambient
+                && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                    effectDescription.TimelinePosition.Frame, out var ambient))
+            {
+                source = ColorGrading.TuneLightColor(
+                    new Vector3(ambient.X, ambient.Y, ambient.Z), colorTune);
+            }
+
+            // 色源の色と固定色をミックス
+            effR = float.Lerp(local.R / 255f, source.X, colorMix);
+            effG = float.Lerp(local.G / 255f, source.Y, colorMix);
+            effB = float.Lerp(local.B / 255f, source.Z, colorMix);
             // 光源強度 × ゆらぎ（frame から決定的に再計算）
             lightIntensity = light.Intensity;
         }
@@ -146,6 +172,14 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
         if (_isFirst || effG != _lastG) { _rim.ColorG = effG; _lastG = effG; }
         if (_isFirst || effB != _lastB) { _rim.ColorB = effB; _lastB = effB; }
         if (_isFirst || blur != _lastBlur) { _blur.StandardDeviation = blur; _lastBlur = blur; }
+        if (_isFirst || edgeMode != _lastEdgeMode) { _rim.Mode = edgeMode; _lastEdgeMode = edgeMode; }
+        // アルファ差分方式では入力1を使わないので、無駄なぼかしを避けて 0 にする
+        var silhouetteSigma = edgeMode >= 0.5f ? silhouetteBlur : 0f;
+        if (_isFirst || silhouetteSigma != _lastSilhouette)
+        {
+            _silhouette.StandardDeviation = silhouetteSigma;
+            _lastSilhouette = silhouetteSigma;
+        }
 
         var blendMode = _item.BlendMode;
         if (_isFirst || blendMode != _lastBlendMode)

@@ -113,6 +113,11 @@ public class LightTargetEffect : VideoEffectBase
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation AmbientColorMix { get; } = new Animation(0, 0, 100);
 
+    [Display(GroupName = "環境光連動", Name = "色の補正",
+        Description = "拾った背景色を「光源らしい色」へ寄せる度合い。0=背景色のまま（暗い背景では暗い光になる）/ 100=彩度を抑えて明るい光へ整形 / 200=ほぼ白へ")]
+    [AnimationSlider("F0", "%", 0, 200)]
+    public Animation AmbientColorTune { get; } = new Animation(100, 0, 200);
+
     [Display(GroupName = "環境光連動", Name = "明るさの追従", Description = "背景の明るさに応じて光の強さを増減させる割合。0で手動の強さのまま")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation AmbientIntensityMix { get; } = new Animation(0, 0, 100);
@@ -142,5 +147,5 @@ public class LightTargetEffect : VideoEffectBase
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
         => [OffsetX, OffsetY, Height, Intensity, Range, FalloffStart, Angle, SpotAngle, SpotSoftness,
-            AmbientColorMix, AmbientIntensityMix, AmbientReference, FlickerAmount, FlickerPeriod];
+            AmbientColorMix, AmbientColorTune, AmbientIntensityMix, AmbientReference, FlickerAmount, FlickerPeriod];
 }

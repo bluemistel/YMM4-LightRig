@@ -6,9 +6,32 @@ using YukkuriMovieMaker.Exo;
 using YukkuriMovieMaker.Player.Video;
 using YukkuriMovieMaker.Plugin;
 using YukkuriMovieMaker.Plugin.Effects;
+using YukkuriMovieMaker.ItemEditor.CustomVisibilityAttributes;
 using LightRig.Shared;
 
 namespace LightRig.Effects.SceneRimLight;
+
+/// <summary>縁の帯をどう作るか。</summary>
+public enum RimEdgeMode
+{
+    [Display(Name = "ぼかしシルエット",
+        Description = "ぼかしたシルエットから帯を作る（既定）。幅と柔らかさが独立して効き、太い縁でも滑らか")]
+    Diffused = 1,
+
+    [Display(Name = "アルファ差分",
+        Description = "輪郭のアルファ差分から帯を作る（従来方式）。細く硬い縁向き")]
+    AlphaDiff = 0,
+}
+
+/// <summary>縁光の色をどこから取るか。</summary>
+public enum RimColorSource
+{
+    [Display(Name = "光源色", Description = "同じチャンネルの「シーン光源ターゲット」の色")]
+    Light = 0,
+
+    [Display(Name = "背景色", Description = "同じチャンネルの「環境光サンプラー」が測った背景の色。背景の光を輪郭で受けている表現")]
+    Ambient = 1,
+}
 
 /// <summary>
 /// シーン光源に連動するリムライト。立ち絵の輪郭のうち、シーン光源の方向に面した側を光らせる。
@@ -34,6 +57,18 @@ public class SceneRimLightEffect : VideoEffectBase
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation AngleOffset { get; } = new Animation(0, -360, 360);
 
+    [Display(GroupName = "リムライト", Name = "縁の作り方",
+        Description = "ぼかしシルエット=太く柔らかい縁が作れる（既定）/ アルファ差分=細く硬い縁")]
+    [EnumComboBox]
+    public RimEdgeMode EdgeMode { get => edgeMode; set => Set(ref edgeMode, value); }
+    RimEdgeMode edgeMode = RimEdgeMode.Diffused;
+
+    [Display(GroupName = "リムライト", Name = "輪郭のぼかし",
+        Description = "帯を作る前にシルエットをぼかす量（px）。大きいほど柔らかく広がる。ぼかしシルエット方式でのみ使用")]
+    [ShowPropertyEditorWhen(nameof(EdgeMode), RimEdgeMode.Diffused)]
+    [AnimationSlider("F1", "px", 0, 100)]
+    public Animation SilhouetteBlur { get; } = new Animation(16, 0, 500);
+
     [Display(GroupName = "リムライト", Name = "縁幅", Description = "光る縁の太さ（px）")]
     [AnimationSlider("F1", "px", 1, 50)]
     public Animation RimWidth { get; } = new Animation(8, 1, 500);
@@ -50,7 +85,18 @@ public class SceneRimLightEffect : VideoEffectBase
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Intensity { get; } = new Animation(100, 0, 100);
 
-    [Display(GroupName = "色", Name = "色ミックス", Description = "0=固定色, 100=光源色。連動時に光源色をどれだけ使うか")]
+    [Display(GroupName = "色", Name = "色源", Description = "縁光の色を光源から取るか、環境光サンプラーの背景色から取るか")]
+    [EnumComboBox]
+    public RimColorSource ColorSource { get => colorSource; set => Set(ref colorSource, value); }
+    RimColorSource colorSource = RimColorSource.Light;
+
+    [Display(GroupName = "色", Name = "色の補正",
+        Description = "色源＝背景色のとき、拾った色を「光源らしい色」へ寄せる度合い。0=背景色のまま / 100=彩度を抑えて明るい光へ整形")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), RimColorSource.Ambient)]
+    [AnimationSlider("F0", "%", 0, 200)]
+    public Animation ColorTune { get; } = new Animation(100, 0, 200);
+
+    [Display(GroupName = "色", Name = "色ミックス", Description = "0=固定色, 100=色源の色。連動時に色源の色をどれだけ使うか")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation ColorMix { get; } = new Animation(100, 0, 100);
 
@@ -74,5 +120,5 @@ public class SceneRimLightEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, RimWidth, Blur, Softness, Intensity, ColorMix];
+        => [AngleOffset, SilhouetteBlur, RimWidth, Blur, Softness, Intensity, ColorMix, ColorTune];
 }

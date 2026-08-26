@@ -28,6 +28,7 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
     private readonly BacklightEffect _item;
     private BacklightCustomEffect? _body;
     private SceneRimLightCustomEffect? _rim;
+    private D2DEffects.GaussianBlur? _silhouette; // リムの入力1へ渡すシルエットのぼかし
     private D2DEffects.GaussianBlur? _blur;
     private D2DEffects.Composite? _composite;
     private D2DEffects.Blend? _blend;
@@ -36,6 +37,7 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
     private bool _isFirst = true;
     private float _lastDirX, _lastDirY, _lastRimWidth, _lastSoftness, _lastBlur, _lastWeight, _lastDim, _lastDesat;
     private float _lastR = -1, _lastG = -1, _lastB = -1;
+    private float _lastSilhouette = -1f, _lastEdgeMode = -1f;
     private YukkuriMovieMaker.Project.Blend _lastBlendMode;
 
     public BacklightEffectProcessor(IGraphicsDevicesAndContext devices, BacklightEffect item)
@@ -58,6 +60,13 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
         }
         disposer.Collect(_body);
         disposer.Collect(_rim);
+
+        // リムのカスタムエフェクトは2入力（元画像＋ぼかしたシルエット）。
+        // 入力1を繋がないと描画されないので必ず接続する。
+        _silhouette = new D2DEffects.GaussianBlur(dc);
+        disposer.Collect(_silhouette);
+        using (var silhouetteOut = _silhouette.Output)
+            _rim.SetInput(1, silhouetteOut, true);
 
         _blur = new D2DEffects.GaussianBlur(dc);
         disposer.Collect(_blur);
@@ -94,12 +103,14 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
     {
         _body?.SetInput(0, input, true);
         _rim?.SetInput(0, input, true);
+        _silhouette?.SetInput(0, input, true);
     }
 
     protected override void ClearEffectChain()
     {
         _body?.SetInput(0, null, true);
         _rim?.SetInput(0, null, true);
+        _silhouette?.SetInput(0, null, true);
         _composite?.SetInput(0, null, true);
         _composite?.SetInput(1, null, true);
         _blend?.SetInput(0, null, true);
@@ -110,7 +121,7 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
 
     public override DrawDescription Update(EffectDescription effectDescription)
     {
-        if (IsPassThroughEffect || _body is null || _rim is null || _blur is null
+        if (IsPassThroughEffect || _body is null || _rim is null || _blur is null || _silhouette is null
             || _composite is null || _blend is null || _crossFade is null)
             return effectDescription.DrawDescription;
 
@@ -159,6 +170,16 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
 
         if (_isFirst || dim != _lastDim) { _body.Dim = dim; _lastDim = dim; }
         if (_isFirst || desat != _lastDesat) { _body.Desat = desat; _lastDesat = desat; }
+
+        // 輪郭のぼかしが 0 ならアルファ差分（従来方式）、それ以外はぼかしシルエット方式
+        var silhouetteBlur = (float)_item.SilhouetteBlur.GetValue(frame, length, fps);
+        var edgeMode = silhouetteBlur > 0.01f ? 1f : 0f;
+        if (_isFirst || edgeMode != _lastEdgeMode) { _rim.Mode = edgeMode; _lastEdgeMode = edgeMode; }
+        if (_isFirst || silhouetteBlur != _lastSilhouette)
+        {
+            _silhouette.StandardDeviation = silhouetteBlur;
+            _lastSilhouette = silhouetteBlur;
+        }
 
         if (_isFirst || dir.X != _lastDirX) { _rim.LightDirX = dir.X; _lastDirX = dir.X; }
         if (_isFirst || dir.Y != _lastDirY) { _rim.LightDirY = dir.Y; _lastDirY = dir.Y; }

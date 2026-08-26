@@ -61,6 +61,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         var ambientColorMix = (float)(item.AmbientColorMix.GetValue(frame, length, fps) / 100.0);
         var ambientIntensityMix = (float)(item.AmbientIntensityMix.GetValue(frame, length, fps) / 100.0);
         var ambientReference = (float)(item.AmbientReference.GetValue(frame, length, fps) / 100.0);
+        var ambientColorTune = (float)(item.AmbientColorTune.GetValue(frame, length, fps) / 100.0);
 
         var c = item.Color;
         var lightColor = new Vector3(c.R / 255f, c.G / 255f, c.B / 255f);
@@ -79,7 +80,13 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
             var amb = new Vector3(ambient.X, ambient.Y, ambient.Z);
 
             if (ambientColorMix > 0f)
-                lightColor = Vector3.Lerp(lightColor, NormalizeTone(amb), Math.Clamp(ambientColorMix, 0f, 1f));
+            {
+                // 背景色をそのまま光色にすると、暗い背景では暗い光になって
+                // 「色が薄くなっただけ」の見た目になる。彩度に上限・明度に下限を設けて
+                // 「光源らしい色」へ整形してから混ぜる（ColorGrading の解説を参照）。
+                var tuned = ColorGrading.TuneLightColor(amb, ambientColorTune);
+                lightColor = Vector3.Lerp(lightColor, ColorGrading.NormalizeTone(tuned), Math.Clamp(ambientColorMix, 0f, 1f));
+            }
 
             if (ambientIntensityMix > 0f)
             {
@@ -127,17 +134,6 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         }
 
         return drawDesc with { Controllers = cachedControllers };
-    }
-
-    /// <summary>
-    /// 色味だけを取り出す（最大成分を 1 に正規化する）。
-    /// 明るさは「明るさの追従」が別に担当するので、色の追従では明度を持ち込まない。
-    /// ほぼ黒（色味が定まらない）場合は白＝色を変えないものとして扱う。
-    /// </summary>
-    static Vector3 NormalizeTone(Vector3 c)
-    {
-        float m = MathF.Max(c.X, MathF.Max(c.Y, c.Z));
-        return m > 1e-3f ? c / m : new Vector3(1f, 1f, 1f);
     }
 
     /// <summary>
