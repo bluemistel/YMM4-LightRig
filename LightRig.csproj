@@ -11,7 +11,7 @@
 
     <AssemblyName>LightRig</AssemblyName>
     <RootNamespace>LightRig</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <!-- YMM4 の更新確認は InformationalVersion を PluginVersion.TryParse で読む。
          SourceLink 等が入ると "1.0.0+<commit sha>" になって解釈できなくなるため抑止する。 -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
