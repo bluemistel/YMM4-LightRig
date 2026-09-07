@@ -77,8 +77,11 @@ internal static class UpdateNotifier
                 return;
 
             await Task.Delay(StartupDelay).ConfigureAwait(false);
-            Notify(current, latest);
-            RememberNotified(latest.Tag);
+
+            // 記録するかどうかは利用者の選択で決まる。
+            // 「いいえ」で閉じたあと次回も知らせてほしい場合は記録しない。
+            if (await NotifyAsync(current, latest).ConfigureAwait(false))
+                RememberNotified(latest.Tag);
         }
         catch
         {
@@ -133,40 +136,59 @@ internal static class UpdateNotifier
         return null;
     }
 
-    static void Notify(PluginVersion current, ReleaseInfo latest)
+    /// <summary>
+    /// 更新を知らせる。<b>戻り値は「このバージョンを通知済みとして記録してよいか」。</b>
+    ///
+    /// <para>
+    /// 記録すると、さらに新しいバージョンが出るまで二度と知らせない。
+    /// 「いいえ」で閉じた利用者が古いまま放置されるのを避けるため、
+    /// その場合だけ<b>次回起動時にもう一度知らせるかを選ばせる</b>。
+    /// </para>
+    ///
+    /// <para>
+    /// ダイアログを出せなかった場合（<c>Application.Current</c> が無い等）は
+    /// <b>記録しない</b>。知らせていないのに通知済みにしてしまうと、
+    /// 次のバージョンが出るまで一切気づけなくなるため。
+    /// </para>
+    /// </summary>
+    static async Task<bool> NotifyAsync(PluginVersion current, ReleaseInfo latest)
     {
         var app = Application.Current;
         if (app is null)
-            return;
+            return false;
 
         var url = string.IsNullOrWhiteSpace(StoreUrl)
             ? $"https://github.com/{Owner}/{Repo}/releases/latest"
             : StoreUrl;
 
-        app.Dispatcher.InvokeAsync(() =>
+        return await app.Dispatcher.InvokeAsync(() => ShowDialogs(current, latest, url)).Task
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>UI スレッドで実際にダイアログを出す。戻り値は通知済みとして記録してよいか。</summary>
+    static bool ShowDialogs(PluginVersion current, ReleaseInfo latest, string url)
+    {
+        var sb = new StringBuilder();
+        sb.Append("LightRig の新しいバージョンがあります。\n\n")
+          .Append($"　お使いのバージョン: {current.Version}\n")
+          .Append($"　最新のバージョン　: {latest.Version.Version}\n");
+
+        // リリースのタイトル。バージョン番号だけでは何が変わったのか分からないため。
+        if (!string.IsNullOrWhiteSpace(latest.Title))
+            sb.Append($"\n{latest.Title}\n");
+
+        // リリースノートの書き出し（最初の段落）。無ければ何も足さない。
+        var summary = latest.GetSummary();
+        if (summary.Length > 0)
+            sb.Append($"\n{summary}\n");
+
+        sb.Append("\n配布ページを開きますか？");
+
+        var result = MessageBox.Show(
+            sb.ToString(), "LightRig の更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
+
+        if (result == MessageBoxResult.Yes)
         {
-            var sb = new StringBuilder();
-            sb.Append("LightRig の新しいバージョンがあります。\n\n")
-              .Append($"　お使いのバージョン: {current.Version}\n")
-              .Append($"　最新のバージョン　: {latest.Version.Version}\n");
-
-            // リリースのタイトル。バージョン番号だけでは何が変わったのか分からないため。
-            if (!string.IsNullOrWhiteSpace(latest.Title))
-                sb.Append($"\n{latest.Title}\n");
-
-            // リリースノートの書き出し（最初の段落）。無ければ何も足さない。
-            var summary = latest.GetSummary();
-            if (summary.Length > 0)
-                sb.Append($"\n{summary}\n");
-
-            sb.Append("\n配布ページを開きますか？");
-
-            var result = MessageBox.Show(
-                sb.ToString(), "LightRig の更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
-
-            if (result != MessageBoxResult.Yes)
-                return;
-
             try
             {
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
@@ -175,11 +197,22 @@ internal static class UpdateNotifier
             {
                 // 既定のブラウザが無い等。ここで落ちる必要は無い。
             }
-        });
+            return true; // 配布ページまで案内できたので、このバージョンの通知は終わり
+        }
+
+        // 「いいえ」の場合だけ、次回も知らせるかを選ばせる。
+        var again = MessageBox.Show(
+            $"次回の起動時にもう一度お知らせしますか？\n\n"
+            + $"「いいえ」を選ぶと、{latest.Version.Version} より新しいバージョンが出るまで通知しません。",
+            "LightRig の更新", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        // 「はい」＝また知らせてほしい → 記録しない（次回また出る）
+        return again != MessageBoxResult.Yes;
     }
 
     // --- 通知済みバージョンの記録 ---------------------------------------------
     // 毎回起動するたびに同じ通知が出ると煩わしいので、知らせたタグを覚えておく。
+    // ただし記録するのは利用者が「もう知らせなくてよい」と選んだ場合だけ（ShowDialogs を参照）。
     // 保存に失敗した場合は「未通知」として扱う（次回また出るだけで害はない）。
 
     static string StatePath => Path.Combine(
