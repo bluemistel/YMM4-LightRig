@@ -277,7 +277,43 @@ return drawDesc with { Controllers = cachedControllers };
 
 ## 更新通知（YMM4 標準機構を使う・2026-09）
 
-**外部ライブラリは不要。** YMM4 本体（`YukkuriMovieMaker.Plugin.dll`）に一式ある。
+**【重要】`IPluginUpdater` は YMM4 4.55.1.1 から呼ばれない（IL で確認済み）。**
+`IPlugin.Updater` / `GitHubReleasesPluginUpdater` / `IPluginUpdateInfo.CanDownload` という
+一式が SDK に用意されているが、**インストール全体を走査しても呼び出しが1箇所も無い**
+（`get_Updater` / `GetUpdatesAsync` / `get_PluginUrl` / `get_CanDownload` すべて 0 箇所。
+走査の妥当性は `get_DrawDescription` が多数ヒットすることで確認した）。
+**宣言だけあって本体側が未実装**なので、実装しても通知は一切出ない。
+他プラグインが自前で `MessageBox` を出しているのはこのため。
+
+→ 実際の通知は **`UpdateNotifier.cs`** が行う。`LightRigUpdater.cs` は本体が
+将来対応したときのために残してある。
+
+### 自前通知の作り（`UpdateNotifier`）
+- **起点は `LightRigPlugin` のコンストラクタ1箇所**。`YukkuriMovieMaker.Plugin.PluginLoader` が
+  起動時に `IPlugin` 実装を生成する（`IsUserPlugin` が `get_Details` を呼んでいる）ことを IL で確認済み。
+  **映像エフェクトが9個あっても確認は1回で済む。** 各エフェクトのコンストラクタから呼ぶ必要はない。
+  `Interlocked.Exchange` で二重起動も防ぐ。
+- **バージョン比較は YMM4 の `PluginVersion` をそのまま使う**（自前で文字列を解釈しない）。
+  タグの先頭の `v` だけ落とす。
+- **取得先は manjubox → GitHub の2段。**
+  `https://manjubox.net/api/ymm4plugins/github/detail/<owner>/<repo>` は
+  GitHub の releases JSON をそのまま15分キャッシュして返す。
+  GitHub API は**未認証だと 1時間 60 リクエスト／IP**なので、プラグインを複数入れていると
+  現実的に到達しうる。manjubox 側はその心配が無いが、**プラグイン一覧に登録された
+  リポジトリのみ**が対象（未登録は `{"error":"Plugin not found"}`）で15分の遅延もあるため、
+  GitHub 直取得を予備に残す。
+- 通知済みのタグを `%LOCALAPPDATA%\LightRig` に記録し、同じバージョンを繰り返し知らせない。
+- 失敗（オフライン・API 制限・private リポジトリ）は**すべて黙って無視する**。
+
+### リリースノートの書き方（通知に出る）
+通知には `name`（タイトル）と `body` の**最初の段落**を出す。
+- **見出しの前に2〜3行の要約段落を置くこと。** いきなり `## 見出し` から始めると
+  拾えるのが見出し1行だけになる（実際に AutoBlendLight のリリースでは「概要」の1語になった）。
+- 画像・HTML タグ・`---` は読み飛ばすので冒頭にあっても構わないが、要約より後ろが安全。
+- タイトルにも内容を入れる（`v1.1.0 — 複数光源・受光・連動の信頼性向上` のように）。
+
+### YMM4 側が対応した場合に備えた記述
+以下は SDK に存在するが**現状は動かない**。
 
 | API | 役割 |
 |---|---|

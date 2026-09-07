@@ -1,7 +1,7 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Text.Json;
+using System.Text;
 using System.Windows;
 using YukkuriMovieMaker.Plugin.Update;
 
@@ -65,20 +65,20 @@ internal static class UpdateNotifier
             if (current is null)
                 return;
 
-            var (latest, tag) = await FetchLatestAsync().ConfigureAwait(false);
-            if (latest is null || tag is null)
+            var latest = await FetchLatestAsync().ConfigureAwait(false);
+            if (latest is null)
                 return;
 
-            if (latest.CompareTo(current) <= 0)
+            if (latest.Version.CompareTo(current) <= 0)
                 return; // 最新か、手元のほうが新しい
 
             // 同じバージョンを毎回知らせない
-            if (AlreadyNotified(tag))
+            if (AlreadyNotified(latest.Tag))
                 return;
 
             await Task.Delay(StartupDelay).ConfigureAwait(false);
-            Notify(current, latest, tag);
-            RememberNotified(tag);
+            Notify(current, latest);
+            RememberNotified(latest.Tag);
         }
         catch
         {
@@ -86,30 +86,54 @@ internal static class UpdateNotifier
         }
     }
 
-    static async Task<(PluginVersion? Version, string? Tag)> FetchLatestAsync()
+    /// <summary>
+    /// 最新のリリースを取得する。
+    ///
+    /// <para>
+    /// <b>manjubox のプラグイン API を優先し、失敗したら GitHub を直接見る。</b>
+    /// GitHub API は未認証だと 1時間あたり 60 リクエスト／IP の制限があり、
+    /// プラグインを複数入れている利用者では現実的に到達しうる。
+    /// manjubox 側は GitHub のリリース情報を15分おきにキャッシュしているのでこの心配が無い。
+    /// 一方でリリース直後は反映が遅れ、第三者サービスなので落ちることもあるため、
+    /// GitHub 直取得を予備に残す。
+    /// </para>
+    ///
+    /// <para>
+    /// manjubox 側は<b>プラグイン一覧に登録されたリポジトリのみ</b>が対象で、
+    /// 未登録だと <c>{"error":"Plugin not found"}</c> が返る（その場合も予備へ落ちる）。
+    /// </para>
+    /// </summary>
+    static async Task<ReleaseInfo?> FetchLatestAsync()
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         // GitHub API は User-Agent 必須（無いと 403 になる）
         http.DefaultRequestHeaders.Add("User-Agent", $"{Repo}-UpdateCheck");
         http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
 
-        var json = await http.GetStringAsync(
-            $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest").ConfigureAwait(false);
+        string[] endpoints =
+        [
+            $"https://manjubox.net/api/ymm4plugins/github/detail/{Owner}/{Repo}",
+            $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest",
+        ];
 
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("tag_name", out var tagElement))
-            return (null, null);
-
-        var tag = tagElement.GetString();
-        if (string.IsNullOrWhiteSpace(tag))
-            return (null, null);
-
-        // タグは "v1.1.0" の形を想定。PluginVersion は "v" を解釈しないので落とす。
-        var text = tag.TrimStart('v', 'V');
-        return PluginVersion.TryParse(text, out var version) ? (version, tag) : (null, null);
+        foreach (var url in endpoints)
+        {
+            try
+            {
+                var json = await http.GetStringAsync(url).ConfigureAwait(false);
+                var info = ReleaseInfo.PickLatest(json);
+                if (info is not null)
+                    return info;
+            }
+            catch
+            {
+                // 次の取得先へ
+            }
+        }
+        return null;
     }
 
-    static void Notify(PluginVersion current, PluginVersion latest, string tag)
+    static void Notify(PluginVersion current, ReleaseInfo latest)
     {
         var app = Application.Current;
         if (app is null)
@@ -121,14 +145,24 @@ internal static class UpdateNotifier
 
         app.Dispatcher.InvokeAsync(() =>
         {
-            var message =
-                $"LightRig の新しいバージョンがあります。\n\n"
-                + $"　お使いのバージョン: {current.Version}\n"
-                + $"　最新のバージョン　: {latest.Version}\n\n"
-                + "配布ページを開きますか？";
+            var sb = new StringBuilder();
+            sb.Append("LightRig の新しいバージョンがあります。\n\n")
+              .Append($"　お使いのバージョン: {current.Version}\n")
+              .Append($"　最新のバージョン　: {latest.Version.Version}\n");
+
+            // リリースのタイトル。バージョン番号だけでは何が変わったのか分からないため。
+            if (!string.IsNullOrWhiteSpace(latest.Title))
+                sb.Append($"\n{latest.Title}\n");
+
+            // リリースノートの書き出し（最初の段落）。無ければ何も足さない。
+            var summary = latest.GetSummary();
+            if (summary.Length > 0)
+                sb.Append($"\n{summary}\n");
+
+            sb.Append("\n配布ページを開きますか？");
 
             var result = MessageBox.Show(
-                message, "LightRig の更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                sb.ToString(), "LightRig の更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
 
             if (result != MessageBoxResult.Yes)
                 return;
