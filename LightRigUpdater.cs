@@ -1,9 +1,17 @@
-using YukkuriMovieMaker.Plugin.Update;
+﻿using YukkuriMovieMaker.Plugin.Update;
 
 namespace LightRig;
 
 /// <summary>
-/// LightRig の更新確認。
+/// LightRig の更新確認（YMM4 本体向けの実装）。
+///
+/// <para>
+/// <b>【重要】YMM4 4.55.1.1 はこの API を呼ばない。</b>インストール全体を IL で調べたところ
+/// <c>get_Updater</c> / <c>GetUpdatesAsync</c> / <c>get_PluginUrl</c> / <c>get_CanDownload</c> の
+/// 呼び出しが1箇所も無く、実装しても何も起きない。
+/// 実際の通知は <see cref="UpdateNotifier"/> が行う。本体が将来対応したときのためにここは残す。
+/// </para>
+///
 ///
 /// <para>
 /// <b>バージョンの確認は GitHub Releases、案内先は配布ページ</b>という組み合わせにするための薄い委譲。
@@ -30,7 +38,7 @@ internal sealed class LightRigUpdater : IPluginUpdater
     /// <b>BOOTH の商品ページ URL をここに入れる。</b>
     /// 空のままなら GitHub のリポジトリを開くので、未設定でも壊れない。
     /// </summary>
-    const string StoreUrl = "";
+    internal const string StoreUrl = "";
 
     readonly GitHubReleasesPluginUpdater<LightRigPlugin> gitHub = new(Owner, Repo);
 

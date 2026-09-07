@@ -12,6 +12,12 @@ namespace LightRig;
 [PluginDetails(AuthorName = "bluemistel")]
 public class LightRigPlugin : IPlugin
 {
+    /// <summary>
+    /// YMM4 の PluginLoader は起動時に IPlugin 実装を生成する（IL で確認済み）。
+    /// ここを更新確認の起点にすれば、映像エフェクトが何個あっても確認は1回で済む。
+    /// </summary>
+    public LightRigPlugin() => UpdateNotifier.EnsureCheckedOnce();
+
     public string Name => "LightRig";
 
     /// <summary>
