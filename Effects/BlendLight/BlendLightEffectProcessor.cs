@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Vortice.Direct2D1;
 using D2DEffects = Vortice.Direct2D1.Effects;
 using YukkuriMovieMaker.Commons;
@@ -29,7 +29,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
     private D2DEffects.CrossFade? _crossFade;
 
     private bool _isFirst = true;
-    private float _lastDirX, _lastDirY, _lastSpread, _lastMode, _lastRimWidth, _lastSoftness;
+    private float _lastDirX, _lastDirY, _lastSpread, _lastMode;
     private float _lastSaturation, _lastGain, _lastBlur, _lastWeight;
     private float _lastUvOriginX, _lastUvOriginY, _lastUvScaleX, _lastUvScaleY;
     private float _lastUseGrid = -1f;
@@ -114,15 +114,14 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         var angleOffset = (float)_item.AngleOffset.GetValue(frame, length, fps);
         var localIntensity = (float)(_item.Intensity.GetValue(frame, length, fps) / 100.0);
         var spread = (float)(_item.Spread.GetValue(frame, length, fps) / 100.0);
-        var rimWidth = (float)_item.RimWidth.GetValue(frame, length, fps);
-        var softness = (float)(_item.Softness.GetValue(frame, length, fps) / 100.0);
         var blur = (float)_item.Blur.GetValue(frame, length, fps);
         var saturation = (float)(_item.Saturation.GetValue(frame, length, fps) / 100.0);
         var gain = (float)(_item.Gain.GetValue(frame, length, fps) / 100.0);
         var rangeScale = (float)(_item.RangeScale.GetValue(frame, length, fps) / 100.0);
         var offsetX = (float)_item.OffsetX.GetValue(frame, length, fps);
         var offsetY = (float)_item.OffsetY.GetValue(frame, length, fps);
-        var mode = (float)(int)_item.Mode; // 0=グラデーション, 1=縁取り, 2=全体
+        var mode = (float)(int)_item.Mode; // 0=グラデーション, 2=全体
+        var colorTune = (float)(_item.ColorTune.GetValue(frame, length, fps) / 100.0);
         var method = (float)(int)_item.Method; // 0=光を重ねる, 1=色調同化
         var tone = (float)(_item.ToneStrength.GetValue(frame, length, fps) / 100.0);
         var lumaMatch = (float)(_item.LumaMatch.GetValue(frame, length, fps) / 100.0);
@@ -140,13 +139,11 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
             dir = LightMath.DirFromAngle(0f);
         }
         else if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
-            lightIntensity = light.Intensity
-                * LightMath.Flicker(frame, fps, light.FlickerAmount, light.FlickerSpeed, light.FlickerSeed)
-                * LightMath.Attenuation(light, itemPos);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
+            lightIntensity = light.Intensity;
         }
         else
         {
@@ -161,11 +158,14 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
 
         if (_item.Channel != LightChannelOrOff.Off
             && AmbientSignalStore.TryGetState(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var ambient))
+                effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
         {
-            fallbackR = ambient.Color.X;
-            fallbackG = ambient.Color.Y;
-            fallbackB = ambient.Color.Z;
+            // 拾った背景色を「光源らしい色」へ寄せる（0%なら素通し）
+            var tunedFallback = ColorGrading.TuneLightColor(
+                new Vector3(ambient.Color.X, ambient.Color.Y, ambient.Color.Z), colorTune);
+            fallbackR = tunedFallback.X;
+            fallbackG = tunedFallback.Y;
+            fallbackB = tunedFallback.Z;
 
             if (_item.ColorSource == BlendLightColorSource.Grid && ambient.HasGrid)
             {
@@ -183,10 +183,11 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
                 var grid = ambient.Grid!;
                 for (int i = 0; i < grid.Length; i++)
                 {
-                    if (!_hasCells || _lastCells[i] != grid[i])
+                    var cell = ColorGrading.TuneLightColor(grid[i], colorTune);
+                    if (!_hasCells || _lastCells[i] != cell)
                     {
-                        _light.SetCell(i, grid[i]);
-                        _lastCells[i] = grid[i];
+                        _light.SetCell(i, cell);
+                        _lastCells[i] = cell;
                     }
                 }
                 _hasCells = true;
@@ -199,8 +200,6 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         if (_isFirst || dir.Y != _lastDirY) { _light.LightDirY = dir.Y; _lastDirY = dir.Y; }
         if (_isFirst || spread != _lastSpread) { _light.Spread = spread; _lastSpread = spread; }
         if (_isFirst || mode != _lastMode) { _light.Mode = mode; _lastMode = mode; }
-        if (_isFirst || rimWidth != _lastRimWidth) { _light.RimWidth = rimWidth; _lastRimWidth = rimWidth; }
-        if (_isFirst || softness != _lastSoftness) { _light.Softness = softness; _lastSoftness = softness; }
         if (_isFirst || saturation != _lastSaturation) { _light.Saturation = saturation; _lastSaturation = saturation; }
         if (_isFirst || gain != _lastGain) { _light.Gain = gain; _lastGain = gain; }
         if (_isFirst || useGrid != _lastUseGrid) { _light.UseGrid = useGrid; _lastUseGrid = useGrid; }

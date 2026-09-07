@@ -17,9 +17,6 @@ public enum BlendLightMode
     [Display(Name = "グラデーション", Description = "光源方向に沿って面で染める。光源の向きが必要")]
     Gradient = 0,
 
-    [Display(Name = "縁取り", Description = "光源側の輪郭だけを染める。光源の向きが必要")]
-    Edge = 1,
-
     [Display(Name = "全体", Description = "被写体全体へ均一に背景色を乗せる。光源を置かずに背景へ馴染ませたいときはこれ")]
     Uniform = 2,
 }
@@ -74,7 +71,7 @@ public class BlendLightEffect : VideoEffectBase
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation AngleOffset { get; } = new Animation(0, -360, 360);
 
-    [Display(GroupName = "なじませ", Name = "モード", Description = "グラデーション=光源側を面で染める / 縁取り=光源側の輪郭だけを染める / 全体=向きを使わず均一に乗せる")]
+    [Display(GroupName = "なじませ", Name = "モード", Description = "グラデーション=光源側を面で染める / 全体=向きを使わず均一に乗せる。輪郭だけを染めたい場合は「リムライト(光源連動)」の色源を背景色にしてください")]
     [EnumComboBox]
     public BlendLightMode Mode { get => mode; set => Set(ref mode, value); }
     BlendLightMode mode = BlendLightMode.Gradient;
@@ -93,16 +90,6 @@ public class BlendLightEffect : VideoEffectBase
     [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Gradient)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Spread { get; } = new Animation(70, 0, 100);
-
-    [Display(GroupName = "なじませ", Name = "縁幅", Description = "縁取りモードで染める縁の太さ（px）")]
-    [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Edge)]
-    [AnimationSlider("F1", "px", 1, 50)]
-    public Animation RimWidth { get; } = new Animation(10, 1, 500);
-
-    [Display(GroupName = "なじませ", Name = "締まり", Description = "縁取りモードの縁の締まり（0=くっきり, 100=柔らかい）")]
-    [ShowPropertyEditorWhen(nameof(Mode), BlendLightMode.Edge)]
-    [AnimationSlider("F0", "%", 0, 100)]
-    public Animation Softness { get; } = new Animation(0, 0, 100);
 
     [Display(GroupName = "色調同化", Name = "色味の同化", Description = "背景の色味をどれだけ乗算で移すか。明るさは変えません")]
     [ShowPropertyEditorWhen(nameof(Method), BlendLightMethod.ToneMatch)]
@@ -133,6 +120,11 @@ public class BlendLightEffect : VideoEffectBase
     [EnumComboBox]
     public BlendLightColorSource ColorSource { get => colorSource; set => Set(ref colorSource, value); }
     BlendLightColorSource colorSource = BlendLightColorSource.Grid;
+
+    [Display(GroupName = "背景色", Name = "色の補正",
+        Description = "拾った背景色を「光源らしい色」へ寄せる度合い。0=背景色のまま / 100=彩度を抑えて明るい光へ整形。方式＝光を重ねる で特に効果的")]
+    [AnimationSlider("F0", "%", 0, 200)]
+    public Animation ColorTune { get; } = new Animation(0, 0, 200);
 
     [Display(GroupName = "背景色", Name = "彩度", Description = "乗せる背景色の鮮やかさ（0でモノクロ）")]
     [AnimationSlider("F0", "%", 0, 200)]
@@ -172,6 +164,6 @@ public class BlendLightEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, Intensity, Spread, RimWidth, Softness, Blur, ToneStrength, LumaMatch,
-            Saturation, Gain, RangeScale, OffsetX, OffsetY];
+        => [AngleOffset, Intensity, Spread, Blur, ToneStrength, LumaMatch,
+            ColorTune, Saturation, Gain, RangeScale, OffsetX, OffsetY];
 }

@@ -19,6 +19,7 @@ public sealed class SceneRimLightCustomEffect : D2D1CustomShaderEffectBase
         ColorR,
         ColorG,
         ColorB,
+        Mode,
     }
 
     public float LightDirX { set => SetValue((int)PropertyIndex.LightDirX, value); }
@@ -28,11 +29,14 @@ public sealed class SceneRimLightCustomEffect : D2D1CustomShaderEffectBase
     public float ColorR    { set => SetValue((int)PropertyIndex.ColorR, value); }
     public float ColorG    { set => SetValue((int)PropertyIndex.ColorG, value); }
     public float ColorB    { set => SetValue((int)PropertyIndex.ColorB, value); }
+    public float Mode      { set => SetValue((int)PropertyIndex.Mode, value); }
 
     public SceneRimLightCustomEffect(IGraphicsDevicesAndContext devices)
         : base(Create<EffectImpl>(devices)) { }
 
-    [CustomEffect(1)]
+    // 入力0=元画像, 入力1=元画像をガウスぼかししたもの（ぼかしシルエット方式で使う）。
+    // 未接続の入力を残すと描画できないので、C# 側で必ず両方を繋ぐこと。
+    [CustomEffect(2)]
     private sealed class EffectImpl : D2D1CustomShaderEffectImplBase<EffectImpl>
     {
         private ConstantBuffer _cb;
@@ -58,6 +62,9 @@ public sealed class SceneRimLightCustomEffect : D2D1CustomShaderEffectBase
         [CustomEffectProperty(PropertyType.Float, (int)PropertyIndex.ColorB)]
         public float ColorB { get => _cb.ColorB; set { _cb.ColorB = value; UpdateConstants(); } }
 
+        [CustomEffectProperty(PropertyType.Float, (int)PropertyIndex.Mode)]
+        public float Mode { get => _cb.Mode; set { _cb.Mode = value; UpdateConstants(); } }
+
         public EffectImpl() : base(ShaderResourceLoader.Get("SceneRimLightPS.cso")) { }
 
         protected override void UpdateConstants()
@@ -69,16 +76,22 @@ public sealed class SceneRimLightCustomEffect : D2D1CustomShaderEffectBase
             RawRect[] inputRects, RawRect[] inputOpaqueSubRects,
             out RawRect outputRect, out RawRect outputOpaqueSubRect)
         {
+            // 入力0（元画像）と入力1（ぼかし済み）の和集合を縁幅ぶん広げる
             var i = inputRects[0];
+            var d = inputRects.Length > 1 ? inputRects[1] : i;
             int r = Range;
-            outputRect = new RawRect(i.Left - r, i.Top - r, i.Right + r, i.Bottom + r);
+            outputRect = new RawRect(
+                Math.Min(i.Left, d.Left) - r, Math.Min(i.Top, d.Top) - r,
+                Math.Max(i.Right, d.Right) + r, Math.Max(i.Bottom, d.Bottom) + r);
             outputOpaqueSubRect = default;
         }
 
         public override void MapOutputRectToInputRects(RawRect outputRect, RawRect[] inputRects)
         {
             int r = Range;
-            inputRects[0] = new RawRect(outputRect.Left - r, outputRect.Top - r, outputRect.Right + r, outputRect.Bottom + r);
+            var expanded = new RawRect(outputRect.Left - r, outputRect.Top - r, outputRect.Right + r, outputRect.Bottom + r);
+            for (int k = 0; k < inputRects.Length; k++)
+                inputRects[k] = expanded;
         }
 
         // HLSL の cbuffer と型・順序・並びを厳密に一致させること（float8個=16byte境界OK）。
@@ -92,7 +105,7 @@ public sealed class SceneRimLightCustomEffect : D2D1CustomShaderEffectBase
             public float ColorR;
             public float ColorG;
             public float ColorB;
-            public float Pad;
+            public float Mode;
         }
     }
 }

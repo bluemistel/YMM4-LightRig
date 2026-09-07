@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Numerics;
 
 namespace LightRig.Shared;
@@ -29,8 +29,26 @@ public enum LightSourceType
 /// こうすることで、YMM4 が一時停止時に別 Usage で再描画してフォールバック値を拾った場合でも、
 /// またプレビューとエクスポートの間でも、同じ frame では必ず同じ明るさになる（非決定性を排除）。
 /// </summary>
-public readonly struct LightState
+public readonly struct LightState : IEquatable<LightState>
 {
+    /// <summary>
+    /// 値等価。<see cref="FrameSignalStore{T}"/> が「同じフレームなのに値が変わった
+    /// ＝光源が編集された」を判定して古い履歴を捨てるために使う。
+    /// 既定の <c>ValueType.Equals</c> はリフレクションで遅いので明示する。
+    /// </summary>
+    public bool Equals(LightState o)
+        => Type == o.Type && Position == o.Position && Angle == o.Angle
+        && Range == o.Range && FalloffStart == o.FalloffStart
+        && SpotAngle == o.SpotAngle && SpotSoftness == o.SpotSoftness
+        && Height == o.Height && Color == o.Color && Intensity == o.Intensity
+        && FlickerAmount == o.FlickerAmount && FlickerSpeed == o.FlickerSpeed
+        && FlickerSeed == o.FlickerSeed && AmbientColor == o.AmbientColor;
+
+    public override bool Equals(object? obj) => obj is LightState o && Equals(o);
+
+    public override int GetHashCode()
+        => HashCode.Combine(Position, Angle, Range, Height, Color, Intensity, (int)Type);
+
     /// <summary>
     /// 光源の種類。<see cref="LightSourceType.Directional"/> のときは <see cref="Position"/> は使われず、
     /// <see cref="Angle"/> がそのまま光の向きになる（アイテムの位置によらず一定）。

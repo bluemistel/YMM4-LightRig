@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
@@ -12,9 +12,12 @@
     <AssemblyName>LightRig</AssemblyName>
     <RootNamespace>LightRig</RootNamespace>
     <Version>1.0.0</Version>
+    <!-- YMM4 の更新確認は InformationalVersion を PluginVersion.TryParse で読む。
+         SourceLink 等が入ると "1.0.0+<commit sha>" になって解釈できなくなるため抑止する。 -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Authors>bluemistel</Authors>
     <Product>LightRig</Product>
-    <Description>シーンに1つ置いた仮想光源を全エフェクトが自動参照する YMM4 ライティングプラグイン。リムライト・シェーディング・逆光・リライティング・落とし影・空気遠近・背景なじませを一括で連動させる。</Description>
+    <Description>シーンに1つ置いた仮想光源を全エフェクトが自動参照する YMM4 ライティングプラグイン。リムライト・シェーディング・受光・逆光・落とし影・空気遠近・背景なじませを一括で連動させる。</Description>
     <NeutralLanguage>ja-JP</NeutralLanguage>
   </PropertyGroup>
 

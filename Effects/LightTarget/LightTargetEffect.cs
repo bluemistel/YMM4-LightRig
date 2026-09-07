@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -22,7 +22,9 @@ public enum LightFalloffMode
 }
 
 /// <summary>
-/// シーンに1つ置く「シーン光源」の発信役マーカーエフェクト。
+/// シーンに置く「シーン光源」の発信役マーカーエフェクト。
+/// <b>同じチャンネルにいくつ置いてもよい。</b>消費側は距離減衰を重みにして全部を合成するので、
+/// 街灯が並ぶ道のような構図でも、チャンネルを切り替えずに近い光源から強く光を受けられる。
 /// 映像には一切手を加えず、自アイテムのワールド座標＋オフセットと光色・強度・ゆらぎ係数を
 /// 毎フレーム共有ストア（<see cref="LightSignalStore"/>）へ発信する。
 /// 同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を自動参照する。
@@ -45,10 +47,15 @@ public class LightTargetEffect : VideoEffectBase
 {
     public override string Label => "シーン光源ターゲット";
 
-    [Display(GroupName = "光源", Name = "チャンネル", Description = "同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を参照する")]
+    [Display(GroupName = "光源", Name = "チャンネル", Description = "同じチャンネルを指定した消費エフェクト（リムライト等）がこの光源を参照する。同じチャンネルに複数の光源を置くと、距離減衰を重みにして合成される")]
     [EnumComboBox]
     public LightChannel Channel { get => channel; set => Set(ref channel, value); }
     LightChannel channel = LightChannel.Ch1;
+
+    [Display(GroupName = "光源", Name = "発信の延長", Description = "発信をアイテム終了後も何フレーム続けるか。場面切り替え（押し出し等）を挟むと、切り替え中も立ち絵が光を参照し続けるのに光源アイテムは終わっているため、連動が切れて見た目が変わることがある。場面切り替えの長さ（フレーム数）を入れると解消する。0=アイテムが終わったら即座に発信を止める")]
+    [TextBoxSlider("F0", "F", 0, 120)]
+    public double PublishExtension { get => publishExtension; set => Set(ref publishExtension, Math.Clamp(value, 0, 100000)); }
+    double publishExtension = 0;
 
     [Display(GroupName = "光源", Name = "種類", Description = "点光源=位置から放射状に照らし距離で減衰 / 平行光=位置によらず角度一定 / スポット=指定方向へ円錐状")]
     [EnumComboBox]
@@ -97,12 +104,12 @@ public class LightTargetEffect : VideoEffectBase
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation Angle { get; } = new Animation(0, -360, 360);
 
-    [Display(GroupName = "範囲・減衰", Name = "スポット角", Description = "スポットの円錐の広がり（全角）")]
+    [Display(GroupName = "範囲・減衰", Name = "スポット角", Description = "スポットの円錐の広がり（全角）。【判定はアイテム1点（中心）で行われます】立ち絵のシルエットに光が掛かっているかではなく、アイテムの中心が円錐の中に入っているかで決まるため、絵の見た目より広めに取る必要があります")]
     [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "°", 1, 180)]
     public Animation SpotAngle { get; } = new Animation(60, 1, 180);
 
-    [Display(GroupName = "範囲・減衰", Name = "スポットの縁", Description = "スポットの縁のぼけ具合（0=くっきり）")]
+    [Display(GroupName = "範囲・減衰", Name = "スポットの縁", Description = "スポットの縁のぼけ具合（0=くっきり）。プレビューの外側の線は「光が 0 になる位置」、内側の線は「等倍で当たる位置」です。この値を上げると内側の線が内へ寄り、等倍で当たる範囲が狭くなります")]
     [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation SpotSoftness { get; } = new Animation(30, 0, 100);
@@ -110,6 +117,11 @@ public class LightTargetEffect : VideoEffectBase
     [Display(GroupName = "環境光連動", Name = "色の追従", Description = "同じチャンネルの「環境光サンプラー」が測った背景の色へ光の色を寄せる割合。0で手動の色のまま")]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation AmbientColorMix { get; } = new Animation(0, 0, 100);
+
+    [Display(GroupName = "環境光連動", Name = "色の補正",
+        Description = "拾った背景色を「光源らしい色」へ寄せる度合い。0=背景色のまま（暗い背景では暗い光になる）/ 100=彩度を抑えて明るい光へ整形 / 200=ほぼ白へ")]
+    [AnimationSlider("F0", "%", 0, 200)]
+    public Animation AmbientColorTune { get; } = new Animation(100, 0, 200);
 
     [Display(GroupName = "環境光連動", Name = "明るさの追従", Description = "背景の明るさに応じて光の強さを増減させる割合。0で手動の強さのまま")]
     [AnimationSlider("F0", "%", 0, 100)]
@@ -140,5 +152,5 @@ public class LightTargetEffect : VideoEffectBase
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
         => [OffsetX, OffsetY, Height, Intensity, Range, FalloffStart, Angle, SpotAngle, SpotSoftness,
-            AmbientColorMix, AmbientIntensityMix, AmbientReference, FlickerAmount, FlickerPeriod];
+            AmbientColorMix, AmbientColorTune, AmbientIntensityMix, AmbientReference, FlickerAmount, FlickerPeriod];
 }

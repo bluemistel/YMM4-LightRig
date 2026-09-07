@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Vortice.Direct2D1;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Player.Video;
@@ -98,7 +98,8 @@ internal sealed class DepthFogEffectProcessor : VideoEffectProcessorBase
         if (_item.AmbientChannel != LightChannelOrOff.Off && ambientMix > 0f
             && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage,
                                          (LightChannel)_item.AmbientChannel,
-                                         effectDescription.TimelinePosition.Frame, out var ambient))
+                                         effectDescription.TimelinePosition.Frame,
+                                         new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y), out var ambient))
         {
             fog = Vector3.Lerp(fog, new Vector3(ambient.X, ambient.Y, ambient.Z), ambientMix);
         }

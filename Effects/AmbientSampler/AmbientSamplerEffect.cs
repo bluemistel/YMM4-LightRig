@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
 using YukkuriMovieMaker.Exo;
@@ -35,6 +35,11 @@ public class AmbientSamplerEffect : VideoEffectBase
     [EnumComboBox]
     public LightChannel Channel { get => channel; set => Set(ref channel, value); }
     LightChannel channel = LightChannel.Ch1;
+
+    [Display(GroupName = "環境光", Name = "発信の延長", Description = "発信をアイテム終了後も何フレーム続けるか。場面切り替え（押し出し等）を挟むと、切り替え中も立ち絵が光を参照し続けるのにサンプラーのアイテムは終わっているため、連動が切れて見た目が変わることがある。場面切り替えの長さ（フレーム数）を入れると解消する。0=アイテムが終わったら即座に発信を止める")]
+    [TextBoxSlider("F0", "F", 0, 120)]
+    public double PublishExtension { get => publishExtension; set => Set(ref publishExtension, Math.Clamp(value, 0, 100000)); }
+    double publishExtension = 0;
 
     [Display(GroupName = "詳細", Name = "輝度しきい値",
         Description = "代表色として拾う明るさの下限。画面内で最も明るい部分を100%とした相対値で、0=全体の平均色、上げるほど空や光源など明るい部分だけの色になる。"

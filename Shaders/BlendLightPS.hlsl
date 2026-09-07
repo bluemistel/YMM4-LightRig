@@ -18,10 +18,10 @@ cbuffer Constants : register(b0)
     float lightDirX;   // 光源へ向かうスクリーン方向 X（正規化, Y下系）
     float lightDirY;   // 光源へ向かうスクリーン方向 Y
     float spread;      // グラデーションの広がり 0..1（1=被写体全体へ回り込む）
-    float mode;        // 0=グラデーション, 1=縁取り, 2=全体
+    float mode;        // 0=グラデーション, 2=全体（1=縁取りは廃止。リムライトの色源=背景色で代替）
 
-    float rimWidth;    // 縁取りモードの縁幅 (px)
-    float softness;    // 縁の締まり 0..1
+    float rimWidth;    // 予約（縁取りモード廃止により未使用）
+    float softness;    // 予約（同上）
     float saturation;  // 背景色の彩度倍率（0=モノクロ, 1=そのまま）
     float gain;        // 背景色の明るさ倍率
 
@@ -108,15 +108,6 @@ float4 main(float4 pos : SV_POSITION,
         float t = saturate(0.5f + 0.5f * proj);
         float s = max(spread, 1e-3f);
         mask = smoothstep(1.0f - s, 1.0f, t) * aHere;
-    }
-    else if (mode < 1.5f)
-    {
-        // 縁取り: 光源方向へずらした位置とのアルファ差分＝光源側の輪郭。
-        // 相対オフセットに uv.zw を掛けるのでタイル分割に安全。
-        float2 offUv = uv.xy + dir * max(rimWidth, 0.0f) * uv.zw;
-        float aOff = InputTexture.Sample(InputSampler, offUv).a;
-        float rim = saturate(aHere - aOff);
-        mask = pow(rim, 1.0f + softness * 3.0f);
     }
     else
     {

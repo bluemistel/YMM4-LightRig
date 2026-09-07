@@ -1,9 +1,14 @@
-// シーン連動リライティング ピクセルシェーダー。
-// アルファ（シルエット）から擬似法線を作り、光色でライティングし直す（2トーン + ハイライト）。
-// 影側は影色、光側は光色で元画像を着色し、最も光に面した所へハイライトを足す。
-// 法線はアルファ勾配ベースなので内部ディテール（服の柄・髪）を拾わずシワが出ない。
+// 受光（光源連動）ピクセルシェーダー。
+// アルファ（シルエット）から擬似法線を作り、光の当たる側へ光源色の「光レイヤー」を生成する。
+// 出力は光レイヤーのみ（下地は含まない）。後段でぼかし → 加算/スクリーン等で重ねる。
 //
-// 入力・出力ともプリマルチプライドアルファ。オフセットサンプリングのため矩形を拡張すること。
+// 【なぜ乗算をやめたか】
+// 前身のリライティングは relit = rgb * tone という乗算だったため、
+// 光色が最大 1 である以上 結果が必ず元画素以下になり「色が付いて暗くなる」だけだった。
+// 光を"足す"表現は、リムライト・逆光と同じく別レイヤー化して加算系で重ねるのが正しい
+// （CLAUDE.md「ぼかし量の設計方針(A)」）。
+//
+// 出力はプリマルチプライドアルファ。オフセットサンプリングのため矩形を拡張すること。
 
 Texture2D    InputTexture : register(t0);
 SamplerState InputSampler : register(s0);
@@ -14,18 +19,16 @@ cbuffer Constants : register(b0)
     float lightDirY;   // 光源へ向かうスクリーン方向 Y
     float lightZ;      // 光の正面成分（大きいほど回り込む）
     float formScale;   // アルファ勾配のリング半径 = フォルムの大きさ (px)
+
     float wrap;        // 回り込み（テルミネータを柔らかく）
-    float diffuse;     // 拡散の強さ
+    float diffuse;     // 拡散の広がり
     float highlight;   // ハイライトの強さ
     float shininess;   // ハイライトの締まり
-    float lightR;      // 光色
+
+    float lightR;      // 光色（C# 側で受光量を掛け済み）
     float lightG;
     float lightB;
-    float shadowR;     // 影色
-    float shadowG;
-    float shadowB;
-    float intensity;   // 元画像 ↔ リライト結果 のミックス (0..1)
-    float blur;        // lambert（陰影スカラー）のぼかし量 (px)。絵柄はぼかさない
+    float blur;        // 陰影スカラーのぼかし量 (px)。絵柄はぼかさない
 };
 
 static const float2 kOffsets[8] = {
@@ -37,6 +40,7 @@ static const float2 kOffsets[8] = {
 
 // 指定位置での陰影スカラーを返す: x=lambert（拡散）, y=ndl（ハイライト用の生の内積）。
 // アルファのリング勾配から擬似法線を作る（内部は +Z, 輪郭は外側へ傾く）。
+// 輝度勾配だと服の柄や髪をシワとして拾うので、必ずアルファから作ること。
 float2 computeLighting(float2 p, float2 texel, float2 dir)
 {
     float r = max(formScale, 1.0f);
@@ -60,12 +64,10 @@ float4 main(float4 pos : SV_POSITION,
             float4 posScene : SCENE_POSITION,
             float4 uv : TEXCOORD0) : SV_TARGET
 {
-    float4 src = InputTexture.Sample(InputSampler, uv.xy);
-    float a = src.a;
+    float a = InputTexture.Sample(InputSampler, uv.xy).a;
     if (a <= 1e-5f)
-        return src;
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    float3 rgb = src.rgb / a;
     float2 dir = float2(lightDirX, lightDirY);
     float2 texel = uv.zw;
 
@@ -85,20 +87,16 @@ float4 main(float4 pos : SV_POSITION,
     }
     lit /= wsum;
 
-    float lambert = lit.x;
-    float ndl = lit.y;
+    // 光の当たり具合＝拡散 + ハイライト。シルエットの外へは出さないので a を掛ける。
+    float amount = saturate(lit.x * diffuse);
+    float spec = pow(saturate(lit.y), max(shininess, 1.0f)) * highlight;
+    float mask = saturate(amount + spec) * a;
+    if (mask <= 0.0f)
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    float3 lightCol = float3(lightR, lightG, lightB);
-    float3 shadowCol = float3(shadowR, shadowG, shadowB);
+    // 受光量で 1 を超えた色はここで丸める。プリマルチプライドは rgb <= a が前提で、
+    // 超えると半透明の髪の縁などで合成が破綻するため。
+    float3 col = min(float3(lightR, lightG, lightB), float3(1.0f, 1.0f, 1.0f));
 
-    // 2トーン: 影色 → 光色 を lambert で補間して元画像に掛ける
-    float3 tone = lerp(shadowCol, lightCol, saturate(lambert * diffuse));
-    float3 relit = rgb * tone;
-
-    // ハイライト（最も光に面した法線で強く出す）
-    float h = pow(saturate(ndl), max(shininess, 1.0f)) * highlight;
-    relit += lightCol * h;
-
-    float3 outRgb = lerp(rgb, relit, saturate(intensity));
-    return float4(outRgb * a, a); // 再プリマルチプライ
+    return float4(col * mask, mask); // プリマルチプライド
 }

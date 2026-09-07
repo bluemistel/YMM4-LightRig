@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Windows.Media;
 using Vortice.Direct2D1;
 using YukkuriMovieMaker.Commons;
@@ -67,6 +67,8 @@ internal sealed class SceneShadingEffectProcessor : VideoEffectProcessorBase
         var blur = (float)_item.Blur.GetValue(frame, length, fps);
         var formScale = (float)_item.FormScale.GetValue(frame, length, fps);
         var shadeCol = _item.ShadeColor;
+        var colorMix = (float)(_item.ColorMix.GetValue(frame, length, fps) / 100.0);
+        var colorTune = (float)(_item.ColorTune.GetValue(frame, length, fps) / 100.0);
         var mode = (float)(int)_item.Mode;
 
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
@@ -74,20 +76,42 @@ internal sealed class SceneShadingEffectProcessor : VideoEffectProcessorBase
         float lightZ = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
-            && LightSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var light))
+            && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
+                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
         {
-            dir = LightMath.Rotate(LightMath.ScreenDir(light, itemPos), angleOffset);
+            dir = LightMath.Rotate(light.Dir, angleOffset);
             lightZ = Math.Clamp(light.Height / 400f, 0.05f, 4f);
             // 光が届かない位置なら陰影も付かない（届かない＝そもそも光が当たっていない）
-            strength *= LightMath.Attenuation(light, itemPos);
+            strength *= light.Reach;
         }
         else
         {
             dir = LightMath.DirFromAngle(angleOffset);
         }
 
-        float r = shadeCol.R / 255f, g = shadeCol.G / 255f, b = shadeCol.B / 255f;
+        var localShade = new Vector3(shadeCol.R / 255f, shadeCol.G / 255f, shadeCol.B / 255f);
+        var shade = localShade;
+
+        // --- 影色を背景から取る場合 ---
+        // 影色は「乗算する色」なので、背景色をそのまま入れてはいけない。
+        // 明るい背景では白に近い色＝影が消え、暗い背景では黒に近い色＝潰れる。
+        // 【色味だけを背景から取り、暗さ（明るさ）は固定色側を維持する】
+        // ＝ M9 の「色と明るさは必ず分離する」と同じ方針。
+        // 光源が無くても（単体動作でも）環境光サンプラーさえあれば効く。
+        if (_item.ColorSource == ShadeColorSource.Ambient
+            && _item.Channel != LightChannelOrOff.Off
+            && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage,
+                (LightChannel)_item.Channel, effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
+        {
+            // 彩度が強すぎる背景で影が極端な色にならないよう整形してから色味を取り出す
+            var tuned = ColorGrading.TuneLightColor(new Vector3(ambient.X, ambient.Y, ambient.Z), colorTune);
+            // 固定色の「最大成分」＝影の暗さ。色味だけ差し替える
+            float level = MathF.Max(localShade.X, MathF.Max(localShade.Y, localShade.Z));
+            var ambientShade = ColorGrading.NormalizeTone(tuned) * level;
+            shade = Vector3.Lerp(localShade, ambientShade, Math.Clamp(colorMix, 0f, 1f));
+        }
+
+        float r = shade.X, g = shade.Y, b = shade.Z;
 
         if (_isFirst || dir.X != _lastDirX) { _shade.LightDirX = dir.X; _lastDirX = dir.X; }
         if (_isFirst || dir.Y != _lastDirY) { _shade.LightDirY = dir.Y; _lastDirY = dir.Y; }
