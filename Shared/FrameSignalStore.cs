@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using YukkuriMovieMaker.Player.Video;
 
 namespace LightRig.Shared;
@@ -37,12 +37,39 @@ namespace LightRig.Shared;
 /// </para>
 ///
 /// <para>
+/// 【有効範囲（2026-09・実機の不具合）】発信値には<b>発信元アイテムがタイムライン上で
+/// 存在する範囲</b>を持たせ、現在フレームがその範囲外なら選ばない。
+/// これが無いと、たき火のような<b>途中で終わるアイテムの光が終了後も残り続ける</b>
+/// （「最も近いフレーム」フォールバックが最後に発信されたフレームを無限に拾うため）。
+/// 範囲で弾くので、キャッシュで再実行されない場合（＝範囲内なのに値が無い）は
+/// 従来どおり近いフレームの値を使え、退行しない。
+/// </para>
+///
+/// <para>
+/// 【同一フレームで値が変わったら履歴を捨てる（2026-09・実機の不具合）】
+/// 光源の位置を編集すると、履歴に残った各フレームの値は<b>すべて編集前のもの</b>になる。
+/// 発信側は再描画されたフレームから順に上書きしていくので、まだ上書きされていない
+/// フレームでは古い光源位置が読まれ、<b>再生開始時に前の位置の光や影が一瞬描画される</b>。
+/// 「同じフレームに対して前回と違う値が来た」＝編集された、と判断して
+/// その発信元の他フレームの履歴を捨てると、ちらつきは最初の1フレームだけになる
+/// （同一フレーム内の評価順は保証されないので 0 にはできない）。
+/// アニメーションによる正常な変化は<b>別フレームへの発信</b>なので誤検知しない。
+/// </para>
+///
+/// <para>
 /// 【タイミング注意】同一フレーム内での「発信側 → 消費側」の評価順は保証されない。
 /// 消費側は同一フレームの鮮度を前提にせず、直近既知値で許容する設計にすること。
 /// </para>
 /// </summary>
-internal sealed class FrameSignalStore<T>
+internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer = null)
 {
+    /// <summary>
+    /// 「同じフレームに違う値が来た＝編集された」の判定に使う比較子。
+    /// null なら履歴の破棄を行わない（参照型フィールドを持つ値など、
+    /// 毎回別インスタンスになって誤検知する型はこちらにする）。
+    /// </summary>
+    readonly IEqualityComparer<T>? changeComparer = changeComparer;
+
     /// <summary>チャンネルごとに保持する測定フレーム数の上限。超えた分は古い発信から捨てる。</summary>
     const int MaxHistory = 64;
 
@@ -50,17 +77,34 @@ internal sealed class FrameSignalStore<T>
 
     readonly ConcurrentDictionary<(Guid SceneId, LightChannel Channel), ChannelSignals> channels = new();
 
-    /// <summary>同一フレームに発信された値。発信元（プロセッサのインスタンス）ごとにスロットを持つ。</summary>
+    /// <summary>発信された値と、その発信元が存在するタイムライン上の範囲 [ValidFrom, ValidTo)。</summary>
+    readonly record struct Entry(T Value, long ValidFrom, long ValidTo)
+    {
+        /// <summary>指定フレームでこの値が有効か。範囲が未指定（To&lt;=From）なら常に有効。</summary>
+        public bool CoversFrame(long frame)
+            => ValidTo <= ValidFrom || (frame >= ValidFrom && frame < ValidTo);
+    }
+
+    /// <summary>同一フレームに発信された値。発信元（エフェクトのアイテム）ごとにスロットを持つ。</summary>
     sealed class FrameSlot
     {
-        public readonly ConcurrentDictionary<object, T> ByPublisher = new(ReferenceEqualityComparer.Instance);
+        public readonly ConcurrentDictionary<object, Entry> ByPublisher = new(ReferenceEqualityComparer.Instance);
         public long Seq;
+
+        /// <summary>この時刻に有効な値が1つでもあるか。</summary>
+        public bool HasValueAt(long frame)
+        {
+            foreach (var e in ByPublisher.Values)
+                if (e.CoversFrame(frame))
+                    return true;
+            return false;
+        }
     }
 
     sealed class ChannelSignals
     {
         /// <summary>Usage 別の最新値（最後の手段のフォールバック用）。</summary>
-        public readonly ConcurrentDictionary<TimelineSourceUsage, (long Seq, T Value)> ByUsage = new();
+        public readonly ConcurrentDictionary<TimelineSourceUsage, (long Seq, Entry Entry)> ByUsage = new();
 
         /// <summary>タイムライン上のフレーム別の値。Usage は問わない。</summary>
         public readonly ConcurrentDictionary<long, FrameSlot> ByFrame = new();
@@ -72,24 +116,53 @@ internal sealed class FrameSignalStore<T>
     /// 値を発信する。
     /// <paramref name="frame"/> には <c>TimelinePosition.Frame</c> を渡すこと
     /// （消費側と同じ時計でないと一致判定が働かない。<c>ItemPosition</c> ではない）。
+    /// <paramref name="validFrom"/> / <paramref name="validTo"/> は<b>発信元アイテムが
+    /// タイムライン上に存在する範囲</b>（半開区間）。消費側はこの範囲外のフレームでは
+    /// この値を選ばない。範囲が不明なら両方 0 を渡すと常に有効として扱う。
     /// <paramref name="publisher"/> には<b>発信側エフェクトのアイテム</b>（プロセッサが保持している
     /// <c>item</c>）を渡す。これが同一フレーム内でのスロットの識別子になる。
     /// <b>プロセッサ自身（<c>this</c>）を渡してはいけない。</b>YMM4 は Usage ごとに別のプロセッサを
     /// 作るため、同じ光源が複数スロットを占めて「光源が2個ある」と誤認され明るさが倍になる。
     /// </summary>
-    public void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, object publisher, T value)
+    public void Publish(
+        Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
+        long frame, long validFrom, long validTo, object publisher, T value)
     {
         var signals = channels.GetOrAdd((sceneId, channel), _ => new ChannelSignals());
         var seq = Interlocked.Increment(ref sequence);
+        var entry = new Entry(value, validFrom, validTo);
 
-        signals.ByUsage[usage] = (seq, value);
+        signals.ByUsage[usage] = (seq, entry);
 
         var slot = signals.ByFrame.GetOrAdd(frame, _ => new FrameSlot());
-        slot.ByPublisher[publisher] = value;
+
+        // 【同じフレームに違う値が来た＝設定が編集された】
+        // 履歴に残る他フレームの値はすべて編集前のものなので捨てる。
+        // これをしないと、まだ再描画されていないフレームで古い光源位置が読まれ、
+        // 再生開始時に前の位置の光や影がちらつく。
+        if (changeComparer is not null
+            && slot.ByPublisher.TryGetValue(publisher, out var previous)
+            && !changeComparer.Equals(previous.Value, value))
+        {
+            PurgePublisher(signals, publisher, frame);
+        }
+
+        slot.ByPublisher[publisher] = entry;
         slot.Seq = seq;
 
         if (signals.ByFrame.Count > MaxHistory)
             Prune(signals);
+    }
+
+    /// <summary>指定した発信元の履歴を <paramref name="keepFrame"/> 以外のフレームから取り除く。</summary>
+    static void PurgePublisher(ChannelSignals signals, object publisher, long keepFrame)
+    {
+        foreach (var (frame, slot) in signals.ByFrame)
+        {
+            if (frame == keepFrame)
+                continue;
+            slot.ByPublisher.TryRemove(publisher, out _);
+        }
     }
 
     /// <summary>古い発信から順に履歴を上限まで削る。</summary>
@@ -111,11 +184,12 @@ internal sealed class FrameSignalStore<T>
 
     /// <summary>
     /// 現在フレームに最も適したフレームスロットを探す。
-    /// 「完全一致 → 最も近いフレーム」の順。見つからなければ null。
+    /// 「完全一致 → 最も近いフレーム」の順。いずれも<b>現在フレームを含む有効範囲を持つ値</b>
+    /// が入っているスロットだけを対象にする。見つからなければ null。
     /// </summary>
     static FrameSlot? FindSlot(ChannelSignals signals, long frame)
     {
-        if (signals.ByFrame.TryGetValue(frame, out var exact) && !exact.ByPublisher.IsEmpty)
+        if (signals.ByFrame.TryGetValue(frame, out var exact) && exact.HasValueAt(frame))
             return exact;
 
         // 最も近いフレームの値。
@@ -125,7 +199,9 @@ internal sealed class FrameSignalStore<T>
         FrameSlot? nearest = null;
         foreach (var entry in signals.ByFrame)
         {
-            if (entry.Value.ByPublisher.IsEmpty)
+            // 現在フレームに存在しないアイテムの値は拾わない
+            // （終了したたき火の光が残り続けるのを防ぐ）。
+            if (!entry.Value.HasValueAt(frame))
                 continue;
 
             // Math.Abs は long.MinValue で例外になるため、引き算の向きで絶対値を作る
@@ -153,17 +229,19 @@ internal sealed class FrameSignalStore<T>
         var slot = FindSlot(signals, frame);
         if (slot is not null)
         {
-            foreach (var v in slot.ByPublisher.Values)
+            foreach (var e in slot.ByPublisher.Values)
             {
-                value = v;
+                if (!e.CoversFrame(frame))
+                    continue;
+                value = e.Value;
                 return true;
             }
         }
 
         // 同じ Usage の最新値
-        if (signals.ByUsage.TryGetValue(usage, out var sameUsage))
+        if (signals.ByUsage.TryGetValue(usage, out var sameUsage) && sameUsage.Entry.CoversFrame(frame))
         {
-            value = sameUsage.Value;
+            value = sameUsage.Entry.Value;
             return true;
         }
 
@@ -172,10 +250,10 @@ internal sealed class FrameSignalStore<T>
         var foundAny = false;
         foreach (var entry in signals.ByUsage.Values)
         {
-            if (entry.Seq > newestSeq)
+            if (entry.Seq > newestSeq && entry.Entry.CoversFrame(frame))
             {
                 newestSeq = entry.Seq;
-                value = entry.Value;
+                value = entry.Entry.Value;
                 foundAny = true;
             }
         }
@@ -195,8 +273,11 @@ internal sealed class FrameSignalStore<T>
         var slot = FindSlot(signals, frame);
         if (slot is not null)
         {
-            foreach (var v in slot.ByPublisher.Values)
-                destination.Add(v);
+            foreach (var e in slot.ByPublisher.Values)
+            {
+                if (e.CoversFrame(frame))
+                    destination.Add(e.Value);
+            }
             if (destination.Count > 0)
                 return true;
         }

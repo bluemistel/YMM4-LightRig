@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Vortice.Direct2D1;
 using D2DEffects = Vortice.Direct2D1.Effects;
 using YukkuriMovieMaker.Commons;
@@ -158,7 +158,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
 
         if (_item.Channel != LightChannelOrOff.Off
             && AmbientSignalStore.TryGetState(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, out var ambient))
+                effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
         {
             // 拾った背景色を「光源らしい色」へ寄せる（0%なら素通し）
             var tunedFallback = ColorGrading.TuneLightColor(

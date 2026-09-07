@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -52,6 +52,11 @@ public class LightTargetEffect : VideoEffectBase
     public LightChannel Channel { get => channel; set => Set(ref channel, value); }
     LightChannel channel = LightChannel.Ch1;
 
+    [Display(GroupName = "光源", Name = "発信の延長", Description = "発信をアイテム終了後も何フレーム続けるか。場面切り替え（押し出し等）を挟むと、切り替え中も立ち絵が光を参照し続けるのに光源アイテムは終わっているため、連動が切れて見た目が変わることがある。場面切り替えの長さ（フレーム数）を入れると解消する。0=アイテムが終わったら即座に発信を止める")]
+    [TextBoxSlider("F0", "F", 0, 120)]
+    public double PublishExtension { get => publishExtension; set => Set(ref publishExtension, Math.Clamp(value, 0, 100000)); }
+    double publishExtension = 0;
+
     [Display(GroupName = "光源", Name = "種類", Description = "点光源=位置から放射状に照らし距離で減衰 / 平行光=位置によらず角度一定 / スポット=指定方向へ円錐状")]
     [EnumComboBox]
     public LightSourceType SourceType { get => sourceType; set => Set(ref sourceType, value); }
@@ -99,12 +104,12 @@ public class LightTargetEffect : VideoEffectBase
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation Angle { get; } = new Animation(0, -360, 360);
 
-    [Display(GroupName = "範囲・減衰", Name = "スポット角", Description = "スポットの円錐の広がり（全角）")]
+    [Display(GroupName = "範囲・減衰", Name = "スポット角", Description = "スポットの円錐の広がり（全角）。【判定はアイテム1点（中心）で行われます】立ち絵のシルエットに光が掛かっているかではなく、アイテムの中心が円錐の中に入っているかで決まるため、絵の見た目より広めに取る必要があります")]
     [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "°", 1, 180)]
     public Animation SpotAngle { get; } = new Animation(60, 1, 180);
 
-    [Display(GroupName = "範囲・減衰", Name = "スポットの縁", Description = "スポットの縁のぼけ具合（0=くっきり）")]
+    [Display(GroupName = "範囲・減衰", Name = "スポットの縁", Description = "スポットの縁のぼけ具合（0=くっきり）。プレビューの外側の線は「光が 0 になる位置」、内側の線は「等倍で当たる位置」です。この値を上げると内側の線が内へ寄り、等倍で当たる範囲が狭くなります")]
     [ShowPropertyEditorWhen(nameof(SourceType), LightSourceType.Spot)]
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation SpotSoftness { get; } = new Animation(30, 0, 100);

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -6,6 +6,7 @@ using YukkuriMovieMaker.Exo;
 using YukkuriMovieMaker.Player.Video;
 using YukkuriMovieMaker.Plugin;
 using YukkuriMovieMaker.Plugin.Effects;
+using YukkuriMovieMaker.ItemEditor.CustomVisibilityAttributes;
 using LightRig.Shared;
 
 namespace LightRig.Effects.SceneShading;
@@ -17,6 +18,17 @@ public enum ShadingMode
     Edge = 0,
     [Display(Name = "擬似ノーマル", Description = "アルファのシルエットから擬似法線を作り陰影を付ける（逆光向け・シワが出ない）")]
     PseudoNormal = 1,
+}
+
+/// <summary>影色をどこから取るか。</summary>
+public enum ShadeColorSource
+{
+    [Display(Name = "固定色", Description = "「影色」で指定した色をそのまま使う")]
+    Local = 0,
+
+    [Display(Name = "背景色",
+        Description = "同じチャンネルの「環境光サンプラー」が測った背景の色味を影に乗せる。影は環境光に照らされるので背景の色に寄る")]
+    Ambient = 1,
 }
 
 /// <summary>
@@ -51,10 +63,27 @@ public class SceneShadingEffect : VideoEffectBase
     [AnimationSlider("F0", "%", 0, 100)]
     public Animation Strength { get; } = new Animation(60, 0, 100);
 
-    [Display(GroupName = "シェーディング（共通）", Name = "影色", Description = "陰部分に掛ける色（乗算）")]
+    [Display(GroupName = "影色", Name = "色源", Description = "影の色味を固定色から取るか、環境光サンプラーの背景色から取るか")]
+    [EnumComboBox]
+    public ShadeColorSource ColorSource { get => colorSource; set => Set(ref colorSource, value); }
+    ShadeColorSource colorSource = ShadeColorSource.Local;
+
+    [Display(GroupName = "影色", Name = "影色",
+        Description = "陰部分に掛ける色（乗算）。色源＝背景色のときは、この色の明るさが「影の暗さ」として使われ、色味だけが背景色へ差し替わります")]
     [ColorPicker]
     public Color ShadeColor { get => shadeColor; set => Set(ref shadeColor, value); }
     Color shadeColor = Color.FromArgb(255, 70, 80, 110);
+
+    [Display(GroupName = "影色", Name = "色ミックス", Description = "0=固定色, 100=背景色。背景の色味をどれだけ影へ移すか")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), ShadeColorSource.Ambient)]
+    [AnimationSlider("F0", "%", 0, 100)]
+    public Animation ColorMix { get; } = new Animation(100, 0, 100);
+
+    [Display(GroupName = "影色", Name = "色の補正",
+        Description = "拾った背景色の彩度を抑えて扱いやすい色へ寄せる度合い。0=背景色のまま / 100=標準の補正")]
+    [ShowPropertyEditorWhen(nameof(ColorSource), ShadeColorSource.Ambient)]
+    [AnimationSlider("F0", "%", 0, 200)]
+    public Animation ColorTune { get; } = new Animation(100, 0, 200);
 
     [Display(GroupName = "エッジシェード（モード=エッジシェード時）", Name = "幅", Description = "影を出す縁の太さ（px）")]
     [AnimationSlider("F1", "px", 1, 100)]
@@ -86,5 +115,5 @@ public class SceneShadingEffect : VideoEffectBase
     }
 
     protected override IEnumerable<IAnimatable> GetAnimatables()
-        => [AngleOffset, Strength, Width, Wrap, Softness, Blur, FormScale];
+        => [AngleOffset, Strength, Width, Wrap, Softness, Blur, FormScale, ColorMix, ColorTune];
 }

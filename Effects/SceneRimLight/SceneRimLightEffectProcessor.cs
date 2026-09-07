@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Windows.Media;
 using Vortice.Direct2D1;
 using D2DEffects = Vortice.Direct2D1.Effects;
@@ -143,7 +143,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
             var source = new Vector3(light.Color.X, light.Color.Y, light.Color.Z);
             if (_item.ColorSource == RimColorSource.Ambient
                 && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                    effectDescription.TimelinePosition.Frame, out var ambient))
+                    effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
             {
                 source = ColorGrading.TuneLightColor(
                     new Vector3(ambient.X, ambient.Y, ambient.Z), colorTune);

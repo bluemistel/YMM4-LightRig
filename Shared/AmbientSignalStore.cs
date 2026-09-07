@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using YukkuriMovieMaker.Player.Video;
 
 namespace LightRig.Shared;
@@ -38,6 +38,33 @@ public readonly struct AmbientState
     /// </summary>
     public Vector3[]? Grid { get; init; }
 
+    /// <summary>
+    /// セルごとの被覆率（0..1）。そのセルの画素の平均アルファで、
+    /// <b>「この場所にこの画像が実際に存在するか」</b>を表す。
+    /// 手前に重ねる透過画像（窓枠・前景オブジェクト等）は大部分が透明なので、
+    /// 透明な場所では<b>その後ろの画像のサンプラーを使う</b>ための判断材料になる。
+    /// 取得できていない場合は null。
+    /// </summary>
+    public float[]? GridCoverage { get; init; }
+
+    /// <summary>画像全体の平均アルファ（0..1）。</summary>
+    public float Coverage { get; init; }
+
+    /// <summary>指定シーン座標におけるこの画像の被覆率。矩形外は 0。</summary>
+    public float CoverageAt(Vector2 scenePos)
+    {
+        if (GridCoverage is not { Length: GridSize * GridSize } || !HasGrid)
+            return Coverage;
+
+        var t = (scenePos - RectMin) / RectSize;
+        if (t.X < 0f || t.X > 1f || t.Y < 0f || t.Y > 1f)
+            return 0f;
+
+        int gx = Math.Clamp((int)(t.X * GridSize), 0, GridSize - 1);
+        int gy = Math.Clamp((int)(t.Y * GridSize), 0, GridSize - 1);
+        return GridCoverage[gy * GridSize + gx];
+    }
+
     /// <summary>グリッドが覆う背景アイテムのシーン矩形の左上（px）。</summary>
     public Vector2 RectMin { get; init; }
 
@@ -58,20 +85,130 @@ public readonly struct AmbientState
 /// </summary>
 internal static class AmbientSignalStore
 {
+    // 比較子は渡さない。AmbientState は Grid（配列）を持ち毎回別インスタンスになるため、
+    // 「同じフレームで値が変わった＝編集」の判定が常に真になって履歴が消えてしまう。
     static readonly FrameSignalStore<AmbientState> store = new();
 
     /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
-    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, object publisher, in AmbientState state)
-        => store.Publish(sceneId, usage, channel, frame, publisher, state);
+    public static void Publish(
+        Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
+        long frame, long validFrom, long validTo, object publisher, in AmbientState state)
+        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, publisher, state);
 
-    /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
-    public static bool TryGetState(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out AmbientState state)
-        => store.TryGet(sceneId, usage, channel, frame, out state);
-
-    /// <summary>代表色だけが必要な消費側（リライティングの環境光ミックス等）向けの簡易版。</summary>
-    public static bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out Vector4 color)
+    /// <summary>
+    /// 背景色を取得する。<paramref name="frame"/> は <c>TimelinePosition.Frame</c>。
+    ///
+    /// <para>
+    /// 【複数の背景アイテムに同じチャンネルのサンプラーを付けてよい（2026-09）】
+    /// 背景を複数の画像で組む構成では、同一チャンネルに複数のサンプラーが発信する。
+    /// 単に1つ返すと <c>ConcurrentDictionary</c> の列挙順（＝不定）で決まってしまい、
+    /// どの画像の色が来るか分からず、フレームによって入れ替わってちらつく。
+    /// <b><paramref name="itemPos"/>（消費側のシーン座標）を含む背景を選ぶ</b>ことで
+    /// 「自分の背後にある背景の色」が決定的に得られる。
+    /// </para>
+    /// </summary>
+    public static bool TryGetState(
+        Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
+        long frame, Vector2 itemPos, out AmbientState state)
     {
-        if (TryGetState(sceneId, usage, channel, frame, out var state))
+        var buffer = perThreadBuffer ??= new List<AmbientState>(4);
+        if (!store.TryGetAll(sceneId, usage, channel, frame, buffer) || buffer.Count == 0)
+        {
+            state = default;
+            return false;
+        }
+
+        state = Select(buffer, itemPos);
+        return true;
+    }
+
+    /// <summary>
+    /// 消費側の位置に最も相応しい背景を選ぶ。
+    ///
+    /// <para>
+    /// 【被覆率を最優先にする（2026-09・実機の不具合）】
+    /// 背景を複数枚で組むとき、<b>手前の画像はほぼ必ず透過画像</b>（窓枠・前景オブジェクト等）になる。
+    /// 矩形の大小だけで選ぶと、手前の透過画像が広い矩形を持っているせいで
+    /// <b>その場所が透明なのに選ばれてしまい</b>、後ろの背景の色が使われない。
+    /// そこで<b>その位置に実際に画素があるか（被覆率）</b>を先に見る。
+    /// </para>
+    ///
+    /// 順序は「被覆のあるもののうち最も小さい矩形 → 被覆が最大のもの → 矩形の中心が最も近いもの」。
+    /// </summary>
+    static AmbientState Select(List<AmbientState> candidates, Vector2 itemPos)
+    {
+        if (candidates.Count == 1)
+            return candidates[0];
+
+        // その位置に実体がある（透明ではない）とみなす下限。
+        // 縮小時に縁がぼけるので、わずかに掛かっているだけの画像は選ばない。
+        const float CoverageThreshold = 0.35f;
+
+        AmbientState bestCovered = default;
+        float bestArea = float.MaxValue;
+        var hasCovered = false;
+
+        AmbientState bestCoverage = candidates[0];
+        float topCoverage = -1f;
+
+        AmbientState bestNear = candidates[0];
+        float bestDistance = float.MaxValue;
+
+        foreach (var c in candidates)
+        {
+            if (!c.HasGrid)
+                continue;
+
+            var min = c.RectMin;
+            var max = c.RectMin + c.RectSize;
+            var inside = itemPos.X >= min.X && itemPos.X <= max.X
+                      && itemPos.Y >= min.Y && itemPos.Y <= max.Y;
+
+            if (inside)
+            {
+                float coverage = c.CoverageAt(itemPos);
+                if (coverage > topCoverage)
+                {
+                    topCoverage = coverage;
+                    bestCoverage = c;
+                }
+
+                if (coverage >= CoverageThreshold)
+                {
+                    // 十分に覆っているものの中では、より局所的な（小さい）画像を優先する。
+                    float area = c.RectSize.X * c.RectSize.Y;
+                    if (!hasCovered || area < bestArea)
+                    {
+                        bestCovered = c;
+                        bestArea = area;
+                        hasCovered = true;
+                    }
+                }
+                continue;
+            }
+
+            // どれにも入っていない場合の保険
+            float d = Vector2.DistanceSquared(c.RectMin + c.RectSize * 0.5f, itemPos);
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                bestNear = c;
+            }
+        }
+
+        if (hasCovered)
+            return bestCovered;
+        if (topCoverage >= 0f)
+            return bestCoverage;
+        return bestNear;
+    }
+
+    /// <summary>代表色だけが必要な消費側向けの簡易版。</summary>
+    public static bool TryGet(
+        Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
+        long frame, Vector2 itemPos, out Vector4 color)
+    {
+        if (TryGetState(sceneId, usage, channel, frame, itemPos, out var state))
         {
             color = state.Color;
             return true;
@@ -79,4 +216,7 @@ internal static class AmbientSignalStore
         color = default;
         return false;
     }
+
+    // 選択のたびに List を確保しないための作業用バッファ（描画は複数スレッドから走りうる）。
+    [ThreadStatic] static List<AmbientState>? perThreadBuffer;
 }

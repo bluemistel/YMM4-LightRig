@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 using Vortice.Direct2D1;
 using YukkuriMovieMaker.Player.Video;
@@ -21,7 +21,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
     // 操作点はオフセットが変わった時だけ作り直す（毎フレームの再生成を避ける）
     // DrawDescription.Controllers は ImmutableList<VideoEffectController> 型
     ImmutableList<VideoEffectController> cachedControllers = ImmutableList<VideoEffectController>.Empty;
-    (float X, float Y, LightSourceType Type, float Range, float Start, float Angle, float SpotAngle)? cachedShape;
+    (float X, float Y, LightSourceType Type, float Range, float Start, float Angle, float SpotAngle, float SpotSoftness)? cachedShape;
 
     public ID2D1Image Output => input!;
 
@@ -75,7 +75,9 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         // 「明るさの追従」と二重に効いてしまうため、色は最大成分で正規化して色味だけを取り出す。
         if ((ambientColorMix > 0f || ambientIntensityMix > 0f)
             && AmbientSignalStore.TryGet(desc.SceneId, desc.Usage, item.Channel,
-                desc.TimelinePosition.Frame, out var ambient))
+                desc.TimelinePosition.Frame,
+                // 光源自身の位置にある背景の色を拾う（背景が複数枚のとき、どれを見るかを決める）
+                new Vector2(drawDesc.Draw.X + offsetX, drawDesc.Draw.Y + offsetY), out var ambient))
         {
             var amb = new Vector3(ambient.X, ambient.Y, ambient.Z);
 
@@ -123,13 +125,21 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         // YMM4 は Usage（Playing/Paused/Exporting）ごとに別のプロセッサを作るため、
         // this をキーにすると同じ光源が複数スロットを占め、合成時に「光源が2個ある」と
         // 誤認されて明るさが倍になる。item は Usage をまたいで同一インスタンスなので重複しない。
-        LightSignalStore.Publish(desc.SceneId, desc.Usage, item.Channel, desc.TimelinePosition.Frame, item, state);
+        //
+        // 【有効範囲】この光源アイテムがタイムライン上に存在する区間を一緒に発信する。
+        // これが無いと、途中で終わるアイテム（たき火など）の光が終了後も
+        // 「最も近いフレーム」フォールバックで拾われ続け、消えなくなる。
+        long timelineFrame = desc.TimelinePosition.Frame;
+        long itemStart = timelineFrame - frame;       // frame = ItemPosition.Frame
+        LightSignalStore.Publish(
+            desc.SceneId, desc.Usage, item.Channel,
+            timelineFrame, itemStart, itemStart + length + (long)item.PublishExtension, item, state);
 
         // プレビュー上の操作点（位置はアイテム中心からのオフセット＝OffsetX/Y と同じ座標系）
-        var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle);
+        var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle, spotSoftness);
         if (cachedShape != shape)
         {
-            cachedControllers = BuildControllers(offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle);
+            cachedControllers = BuildControllers(offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle, spotSoftness);
             cachedShape = shape;
         }
 
@@ -146,7 +156,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
     /// </summary>
     ImmutableList<VideoEffectController> BuildControllers(
         float offsetX, float offsetY, LightSourceType type,
-        float range, float falloffStart, float angle, float spotAngle)
+        float range, float falloffStart, float angle, float spotAngle, float spotSoftness)
     {
         var lightPos = new Vector3(offsetX, offsetY, 0f);
         var controllers = new List<VideoEffectController>();
@@ -185,8 +195,20 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         {
             var axis = -LightMath.DirFromAngle(angle);
             float half = Math.Clamp(spotAngle, 1f, 180f) * 0.5f;
+
+            // 外側＝光が 0 になる境界（スポット角そのもの）。
             controllers.Add(BuildRay(lightPos, LightMath.Rotate(axis, -half) * rayLength));
             controllers.Add(BuildRay(lightPos, LightMath.Rotate(axis, half) * rayLength));
+
+            // 内側＝等倍で当たる境界。「スポットの縁」を上げるとここが内へ寄る。
+            // 到達距離を外周・内周の2本の円で見せているのと同じ理由で、外側の線だけだと
+            // 「線に重ねたのに光が当たらない」と見える（外側の線はちょうど 0 の位置）。
+            float innerHalf = half * (1f - Math.Clamp(spotSoftness, 0f, 1f));
+            if (innerHalf > 0.5f && spotSoftness > 0.01f)
+            {
+                controllers.Add(BuildRay(lightPos, LightMath.Rotate(axis, -innerHalf) * rayLength));
+                controllers.Add(BuildRay(lightPos, LightMath.Rotate(axis, innerHalf) * rayLength));
+            }
         }
         else if (type == LightSourceType.Directional)
         {

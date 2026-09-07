@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -44,6 +44,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     private long _lastSampledFrame = long.MinValue;
     private Vector4 _lastColor = new(0.5f, 0.5f, 0.5f, 1f);
     private Vector3[]? _lastGrid;
+    private float[]? _lastGridCoverage;
+    private float _lastCoverage = 1f;
     private Vector2 _lastLocalSize;  // 入力画像のローカルサイズ（px）。矩形は毎フレーム drawDesc から作り直す
     private bool _hasColor;
 
@@ -90,10 +92,12 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
         if (canTry && needSample)
         {
-            if (TrySample(out var color, out var grid, out var localSize))
+            if (TrySample(out var color, out var grid, out var gridCoverage, out var coverage, out var localSize))
             {
                 _lastColor = color;
                 _lastGrid = grid;
+                _lastGridCoverage = gridCoverage;
+                _lastCoverage = coverage;
                 _lastLocalSize = localSize;
                 _hasColor = true;
                 _lastSampledFrame = frame;
@@ -114,12 +118,20 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         {
             var min = SceneRect(drawDesc, out var size);
             // 発信元キーは Usage をまたいで同一の _item（プロセッサは Usage ごとに別インスタンス）
-            AmbientSignalStore.Publish(desc.SceneId, desc.Usage, _item.Channel, frame, _item, new AmbientState
+            // 有効範囲＝このサンプラーを載せたアイテムが存在するタイムライン区間。
+            // 範囲外のフレームでは選ばれないので、背景アイテムが終わった後も
+            // 古い背景色が配られ続けることがない。
+            long itemStart = frame - desc.ItemPosition.Frame;
+            AmbientSignalStore.Publish(
+                desc.SceneId, desc.Usage, _item.Channel,
+                frame, itemStart, itemStart + desc.ItemDuration.Frame + (long)_item.PublishExtension, _item, new AmbientState
             {
                 // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。
                 Frame = _lastSampledFrame,
                 Color = _lastColor,
                 Grid = _lastGrid,
+                GridCoverage = _lastGridCoverage,
+                Coverage = _lastCoverage,
                 RectMin = min,
                 RectSize = size,
             });
@@ -140,10 +152,13 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         return center - size * 0.5f;
     }
 
-    private bool TrySample(out Vector4 color, out Vector3[]? grid, out Vector2 localSize)
+    private bool TrySample(out Vector4 color, out Vector3[]? grid,
+        out float[]? gridCoverage, out float coverage, out Vector2 localSize)
     {
         color = default;
         grid = null;
+        gridCoverage = null;
+        coverage = 0f;
         localSize = default;
         try
         {
@@ -181,7 +196,8 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             var map = _staging.Map(MapOptions.Read);
             try
             {
-                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0), out color, out grid);  // 0..1 の相対しきい値
+                Analyze(map.Bits, map.Pitch, (float)(_item.LuminanceThreshold / 100.0),  // 0..1 の相対しきい値
+                    out color, out grid, out gridCoverage, out coverage);
             }
             finally
             {
@@ -212,18 +228,30 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     ///
     /// 一方グリッドは「その場所の背景色」が欲しいのでしきい値を掛けない。
     /// 不透明画素が1つも無いセルは代表色で埋め、対応付けがずれても破綻しないようにする。
+    ///
+    /// 【アルファの扱い（2026-09）】
+    /// 背景を複数枚で組むとき<b>手前の画像はほぼ必ず透過画像</b>になるので、
+    /// 半透明の画素を不透明と同じ重みで数えてはいけない。
+    /// <b>色はアルファで重み付けして平均</b>し、<b>被覆率（平均アルファ）を別途記録</b>する。
+    /// 8x8 への縮小では透明部と不透明部が混ざって薄いアルファの画素になるため、
+    /// 重み付けしないと「ほとんど透明な縁の色」が実体と同じ影響力を持ってしまう。
+    /// 被覆率は消費側が「その場所にこの画像が実在するか」を判断するのに使う。
     /// </summary>
-    private unsafe void Analyze(nint bits, int pitch, float threshold, out Vector4 color, out Vector3[] grid)
+    private unsafe void Analyze(nint bits, int pitch, float threshold,
+        out Vector4 color, out Vector3[] grid, out float[] gridCoverage, out float coverage)
     {
         var p = (byte*)bits;
 
-        double selR = 0, selG = 0, selB = 0, selA = 0;
-        int selCount = 0;
-        double allR = 0, allG = 0, allB = 0, allA = 0;
-        int allCount = 0;
+        // 合計はすべてアルファ重み付き。除数は画素数ではなくアルファの合計。
+        double selR = 0, selG = 0, selB = 0, selW = 0;
+        double allR = 0, allG = 0, allB = 0, allW = 0;
+        double alphaSum = 0;
+        int pixelCount = 0;
 
         var cellSum = new Vector3[G * G];
-        var cellCount = new int[G * G];
+        var cellWeight = new float[G * G];
+        var cellAlpha = new float[G * G];
+        var cellPixels = new int[G * G];
 
         // 1パス目: グリッドと全画素平均を作りつつ、最大輝度を求める（相対しきい値の基準）
         float maxLum = 0f;
@@ -235,21 +263,30 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             {
                 byte* px = row + x * 4; // B8G8R8A8
                 float pa = px[3] / 255f;
+
+                int gx = Math.Min(x * G / N, G - 1);
+                int gi = gy * G + gx;
+
+                // 被覆率は透明画素も分母に数える（＝その場所に実体があるかを表す）
+                cellAlpha[gi] += pa;
+                cellPixels[gi]++;
+                alphaSum += pa;
+                pixelCount++;
+
                 if (pa <= 1e-4f)
-                    continue; // 透明部分は背景色として扱わない
+                    continue; // 完全な透明部分は色を持たない
 
                 // プリマルチプライドを解除
                 float b = px[0] / 255f / pa;
                 float g = px[1] / 255f / pa;
                 float r = px[2] / 255f / pa;
 
-                allR += r; allG += g; allB += b; allA += pa; allCount++;
+                // 半透明の画素は色への寄与も小さい。アルファで重み付けする。
+                allR += r * pa; allG += g * pa; allB += b * pa; allW += pa;
                 maxLum = MathF.Max(maxLum, 0.299f * r + 0.587f * g + 0.114f * b);
 
-                int gx = Math.Min(x * G / N, G - 1);
-                int gi = gy * G + gx;
-                cellSum[gi] += new Vector3(r, g, b);
-                cellCount[gi]++;
+                cellSum[gi] += new Vector3(r, g, b) * pa;
+                cellWeight[gi] += pa;
             }
         }
 
@@ -272,22 +309,28 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
 
                 if (0.299f * r + 0.587f * g + 0.114f * b >= absThreshold)
                 {
-                    selR += r; selG += g; selB += b; selA += pa; selCount++;
+                    selR += r * pa; selG += g * pa; selB += b * pa; selW += pa;
                 }
             }
         }
 
-        if (selCount > 0)
-            color = new Vector4((float)(selR / selCount), (float)(selG / selCount), (float)(selB / selCount), (float)(selA / selCount));
-        else if (allCount > 0)
-            color = new Vector4((float)(allR / allCount), (float)(allG / allCount), (float)(allB / allCount), (float)(allA / allCount));
+        coverage = pixelCount > 0 ? (float)(alphaSum / pixelCount) : 0f;
+
+        if (selW > 1e-4)
+            color = new Vector4((float)(selR / selW), (float)(selG / selW), (float)(selB / selW), coverage);
+        else if (allW > 1e-4)
+            color = new Vector4((float)(allR / allW), (float)(allG / allW), (float)(allB / allW), coverage);
         else
             color = new Vector4(0f, 0f, 0f, 0f);
 
         var fallback = new Vector3(color.X, color.Y, color.Z);
         grid = new Vector3[G * G];
+        gridCoverage = new float[G * G];
         for (int i = 0; i < grid.Length; i++)
-            grid[i] = cellCount[i] > 0 ? cellSum[i] / cellCount[i] : fallback;
+        {
+            grid[i] = cellWeight[i] > 1e-4f ? cellSum[i] / cellWeight[i] : fallback;
+            gridCoverage[i] = cellPixels[i] > 0 ? cellAlpha[i] / cellPixels[i] : 0f;
+        }
     }
 
     private void EnsureResources(ID2D1DeviceContext mainDc)

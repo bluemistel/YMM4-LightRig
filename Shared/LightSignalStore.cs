@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using YukkuriMovieMaker.Player.Video;
 
 namespace LightRig.Shared;
@@ -16,14 +16,19 @@ namespace LightRig.Shared;
 /// </summary>
 internal static class LightSignalStore
 {
-    static readonly FrameSignalStore<LightState> store = new();
+    // 光源は「同じフレームに違う値が来た＝位置などが編集された」を検出して
+    // 古い履歴を捨てる（再生開始時に前の光源位置がちらつくのを防ぐ）。
+    static readonly FrameSignalStore<LightState> store = new(EqualityComparer<LightState>.Default);
 
     /// <summary>
     /// 光源状態を発信する。<paramref name="frame"/> は <c>TimelinePosition.Frame</c>、
-    /// <paramref name="publisher"/> は発信側プロセッサのインスタンスを渡すこと。
+    /// <paramref name="validFrom"/>/<paramref name="validTo"/> は光源アイテムが存在する
+    /// タイムライン範囲、<paramref name="publisher"/> は発信側エフェクトのアイテムを渡すこと。
     /// </summary>
-    public static void Publish(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, object publisher, in LightState state)
-        => store.Publish(sceneId, usage, channel, frame, publisher, state);
+    public static void Publish(
+        Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
+        long frame, long validFrom, long validTo, object publisher, in LightState state)
+        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, publisher, state);
 
     /// <summary>
     /// 同一チャンネルの光源をすべて集め、立ち絵の位置に対する実効的な光へ合成して返す。

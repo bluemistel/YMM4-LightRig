@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -29,7 +29,11 @@ public class SceneShadowEffect : VideoEffectBase
 {
     public override string Label => "落とし影(光源連動)";
 
-    [Display(GroupName = "連動", Name = "光源チャンネル", Description = "同じチャンネルの「シーン光源ターゲット」に追従する。無効で単体動作")]
+    [Display(GroupName = "連動", Name = "光源チャンネル",
+        Description = "同じチャンネルの「シーン光源ターゲット」に追従する。無効で単体動作。"
+            + "【重要】このエフェクトは影をアイテムの絵に描き込むため、リムライト・受光・シェーディングより"
+            + "後ろ（下）に置いてください。前に置くと影の部分が「被写体の面」とみなされ、"
+            + "別チャンネルの光を受けて色が付きます")]
     [EnumComboBox]
     public LightChannelOrOff Channel { get => channel; set => Set(ref channel, value); }
     LightChannelOrOff channel = LightChannelOrOff.Ch1;
