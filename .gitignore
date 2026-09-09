@@ -20,4 +20,6 @@ build_log.txt
 
 # BOOTH 用の説明文（GitHub には上げない）
 説明文_BOOTH.txt
+# README.md を平文へ加工した配布同梱用。README.md が正本なので版管理しない
+README.txt
 リリース文面.md
