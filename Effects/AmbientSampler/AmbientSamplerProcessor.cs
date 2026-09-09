@@ -161,10 +161,11 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             // 有効範囲＝このサンプラーを載せたアイテムが存在するタイムライン区間。
             // 範囲外のフレームでは選ばれないので、背景アイテムが終わった後も
             // 古い背景色が配られ続けることがない。
+            // 場面切り替え中に保持されている場合はストア側が自動で現在フレームまで伸ばす。
             long itemStart = frame - desc.ItemPosition.Frame;
             AmbientSignalStore.Publish(
                 desc.SceneId, desc.Usage, _item.Channel,
-                frame, itemStart, itemStart + desc.ItemDuration.Frame + (long)_item.PublishExtension,
+                frame, itemStart, itemStart + desc.ItemDuration.Frame,
                 RenderSide.IsHeld(desc), _item, new AmbientState
             {
                 // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。

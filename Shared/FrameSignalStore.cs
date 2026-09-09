@@ -140,6 +140,16 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     {
         var signals = channels.GetOrAdd((sceneId, channel), _ => new ChannelSignals());
         var seq = Interlocked.Increment(ref sequence);
+
+        // 【保持中は有効範囲を現在フレームまで自動で伸ばす】
+        // isHeld ＝「終わったアイテムが場面切り替えのために意図的に描画されている」状態。
+        // 通常の再生では終わったアイテムはそもそも描画されないので、この状態なら
+        // 現在フレームでも値が有効とみなしてよい。
+        // これにより利用者が切り替えの長さを手入力する必要が無くなる（旧「発信の延長」）。
+        // たき火が普通に終わった場合は isHeld にならないので、光が残らない修正は維持される。
+        if (isHeld && validTo > validFrom && validTo <= frame)
+            validTo = frame + 1;
+
         var entry = new Entry(value, validFrom, validTo, isHeld);
 
         signals.ByUsage[usage] = (seq, entry);

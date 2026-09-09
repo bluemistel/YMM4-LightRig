@@ -129,12 +129,12 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         // 【有効範囲】この光源アイテムがタイムライン上に存在する区間を一緒に発信する。
         // これが無いと、途中で終わるアイテム（たき火など）の光が終了後も
         // 「最も近いフレーム」フォールバックで拾われ続け、消えなくなる。
+        // 場面切り替え中に保持されている場合はストア側が自動で現在フレームまで伸ばす。
         long timelineFrame = desc.TimelinePosition.Frame;
         long itemStart = timelineFrame - frame;       // frame = ItemPosition.Frame
         LightSignalStore.Publish(
             desc.SceneId, desc.Usage, item.Channel,
-            timelineFrame, itemStart, itemStart + length + (long)item.PublishExtension,
-            RenderSide.IsHeld(desc), item, state);
+            timelineFrame, itemStart, itemStart + length, RenderSide.IsHeld(desc), item, state);
 
         // プレビュー上の操作点（位置はアイテム中心からのオフセット＝OffsetX/Y と同じ座標系）
         var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle, spotSoftness);

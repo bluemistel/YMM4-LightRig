@@ -52,11 +52,6 @@ public class LightTargetEffect : VideoEffectBase
     public LightChannel Channel { get => channel; set => Set(ref channel, value); }
     LightChannel channel = LightChannel.Ch1;
 
-    [Display(GroupName = "光源", Name = "発信の延長", Description = "発信をアイテム終了後も何フレーム続けるか。場面切り替え（押し出し等）を挟むと、切り替え中も立ち絵が光を参照し続けるのに光源アイテムは終わっているため、連動が切れて見た目が変わることがある。場面切り替えの長さ（フレーム数）を入れると解消する。0=アイテムが終わったら即座に発信を止める")]
-    [TextBoxSlider("F0", "F", 0, 120)]
-    public double PublishExtension { get => publishExtension; set => Set(ref publishExtension, Math.Clamp(value, 0, 100000)); }
-    double publishExtension = 0;
-
     [Display(GroupName = "光源", Name = "種類", Description = "点光源=位置から放射状に照らし距離で減衰 / 平行光=位置によらず角度一定 / スポット=指定方向へ円錐状")]
     [EnumComboBox]
     public LightSourceType SourceType { get => sourceType; set => Set(ref sourceType, value); }
