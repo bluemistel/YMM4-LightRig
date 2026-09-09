@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -38,7 +38,7 @@ public enum RimColorSource
 /// 「シーン光源ターゲット」と同じチャンネルを指定すると、光源の位置・色に自動追従する。
 /// チャンネル=無効、または光源が無い場合は手動の角度・固定色で単体エフェクトとして機能する。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "リムライト(光源連動)",
     ["LightRig"],

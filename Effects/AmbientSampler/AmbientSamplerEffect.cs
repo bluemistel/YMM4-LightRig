@@ -21,7 +21,7 @@ namespace LightRig.Effects.AmbientSampler;
 /// （間隔はミリ秒指定。フレーム単位にするとプロジェクトの FPS で追従速度が変わってしまう）。
 /// 読み戻しに失敗した場合はパススルーのみに縮退し、描画は継続する。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "環境光サンプラー",
     ["LightRig"],

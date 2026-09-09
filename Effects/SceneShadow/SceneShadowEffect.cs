@@ -31,7 +31,7 @@ public enum ShadowDirection
 ///
 /// 制約: 影は立ち絵アイテム自身の描画範囲にしか描けない（背景アイテムの上には落とせない）。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "落とし影(光源連動)",
     ["LightRig"],

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -15,7 +15,7 @@ namespace LightRig.Effects.Backlight;
 /// 「シーン光源ターゲット」と同じチャンネルで光源方向・光色に連動する。無効時は手動角度で単体動作。
 /// 「逆光の強さ」1本で減光と脱色をまとめて調整でき、リムは別途強さ・幅・色を持つ。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "逆光",
     ["LightRig"],

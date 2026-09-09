@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -27,7 +27,7 @@ namespace LightRig.Effects.LightReceive;
 /// 光レイヤーを別に作ってぼかし → 合成モードで重ねる方式（リムライトと同型）。
 /// 乗算で焼き込むと光色が最大 1 である以上 明るくできないため、加算系で重ねている。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "受光(光源連動)",
     ["LightRig"],

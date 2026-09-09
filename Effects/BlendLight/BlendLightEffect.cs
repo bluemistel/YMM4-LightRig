@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -52,7 +52,7 @@ public enum BlendLightColorSource
 /// 光源を置きたくない場合はモード＝全体にすれば向きを使わず背景色を均一に乗せる。
 /// チャンネル=無効、または環境光が無い場合は固定色で単体エフェクトとして機能する。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "背景なじませ(環境光連動)",
     ["LightRig"],

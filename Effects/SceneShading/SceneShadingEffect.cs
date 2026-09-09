@@ -35,7 +35,7 @@ public enum ShadeColorSource
 /// シーン光源に連動するシェーディング。立ち絵のうち光源と反対側を暗くし、立体感や逆光の陰を作る。
 /// 「シーン光源ターゲット」と同じチャンネルで光源方向・高さに追従する。無効時は手動角度で単体動作。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "シェーディング(光源連動)",
     ["LightRig"],

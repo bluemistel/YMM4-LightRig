@@ -37,7 +37,7 @@ public enum LightFalloffMode
 /// UX: 図形や空アイテムに挿してタイムライン上で動かすと、その位置が光源位置になる。
 /// さらにオフセットX/Yで微調整でき、位置・光色・強度・ゆらぎはすべてキーフレーム可能。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "シーン光源ターゲット",
     ["LightRig"],

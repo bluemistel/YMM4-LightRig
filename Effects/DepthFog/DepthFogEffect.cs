@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
@@ -28,7 +28,7 @@ public enum FogDistanceMode
 ///
 /// フォグ色は「環境光サンプラー」から自動取得できる（背景の空の色をそのまま霞の色にできる）。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 [VideoEffect(
     "空気遠近(デプスフォグ)",
     ["LightRig"],

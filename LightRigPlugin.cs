@@ -9,7 +9,7 @@ namespace LightRig;
 /// 同じチャンネルで自動参照し、ライティングの統一と調整コスト削減を図る。
 /// エフェクトは各クラスの [VideoEffect] 属性で自動登録される（ここでの手動登録は不要）。
 /// </summary>
-[PluginDetails(AuthorName = "bluemistel")]
+[PluginDetails(AuthorName = "あおもや", ContentId = "sm46782084")]
 public class LightRigPlugin : IPlugin
 {
     /// <summary>
