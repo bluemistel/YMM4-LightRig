@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Vortice.Direct2D1;
 using D2DEffects = Vortice.Direct2D1.Effects;
 using YukkuriMovieMaker.Commons;
@@ -25,7 +25,7 @@ internal sealed class SceneShadowEffectProcessor : VideoEffectProcessorBase
     private D2DEffects.Composite? _composite;
 
     private bool _isFirst = true;
-    private float _lastLean, _lastLengthRatio, _lastGround, _lastOpacity, _lastTipBlur, _lastBlur;
+    private float _lastLean, _lastLengthRatio, _lastGround, _lastOpacity, _lastTipBlur, _lastBlur, _lastFlip;
     private float _lastR = -1, _lastG = -1, _lastB = -1;
 
     public SceneShadowEffectProcessor(IGraphicsDevicesAndContext devices, SceneShadowEffect item)
@@ -94,14 +94,19 @@ internal sealed class SceneShadowEffectProcessor : VideoEffectProcessorBase
         var blur = (float)_item.Blur.GetValue(frame, length, fps);
         var tipBlur = (float)_item.TipBlur.GetValue(frame, length, fps);
         var col = _item.ShadowColor;
+        // 帯を伸ばす向き。奥（画面上）へ = +1 / 手前（画面下）へ = -1。
+        var flip = _item.Direction == ShadowDirection.Toward ? -1f : 1f;
 
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
         Vector2 dir;
         float lightHeight = 200f; // 光源が無い時の既定の高さ
 
         if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
+                effectDescription.TimelinePosition.Frame, fps, isHeldRender, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
             lightHeight = light.Height;
@@ -132,6 +137,7 @@ internal sealed class SceneShadowEffectProcessor : VideoEffectProcessorBase
         if (_isFirst || r != _lastR) { _shadow.ShadowR = r; _lastR = r; }
         if (_isFirst || g != _lastG) { _shadow.ShadowG = g; _lastG = g; }
         if (_isFirst || b != _lastB) { _shadow.ShadowB = b; _lastB = b; }
+        if (_isFirst || flip != _lastFlip) { _shadow.Flip = flip; _lastFlip = flip; }
         if (_isFirst || blur != _lastBlur) { _blur.StandardDeviation = blur; _lastBlur = blur; }
 
         _isFirst = false;

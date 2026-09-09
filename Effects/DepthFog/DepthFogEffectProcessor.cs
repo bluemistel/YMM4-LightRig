@@ -60,6 +60,10 @@ internal sealed class DepthFogEffectProcessor : VideoEffectProcessorBase
         var length = effectDescription.ItemDuration.Frame;
         var fps = effectDescription.FPS;
 
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
+
         // --- カメラとアイテムの距離（2DCamera の DOF と同じ算出） ---
         if (!Matrix4x4.Invert(drawDesc.Camera, out var invView))
             invView = Matrix4x4.Identity;
@@ -98,7 +102,7 @@ internal sealed class DepthFogEffectProcessor : VideoEffectProcessorBase
         if (_item.AmbientChannel != LightChannelOrOff.Off && ambientMix > 0f
             && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage,
                                          (LightChannel)_item.AmbientChannel,
-                                         effectDescription.TimelinePosition.Frame,
+                                         effectDescription.TimelinePosition.Frame, isHeldRender,
                                          new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y), out var ambient))
         {
             fog = Vector3.Lerp(fog, new Vector3(ambient.X, ambient.Y, ambient.Z), ambientMix);

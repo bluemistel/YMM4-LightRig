@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Windows.Media;
 using Vortice.Direct2D1;
 using D2DEffects = Vortice.Direct2D1.Effects;
@@ -139,6 +139,9 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
         var colorMix = (float)(_item.ColorMix.GetValue(frame, length, fps) / 100.0);
         var local = _item.LocalColor;
 
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
         Vector2 dir;
         float effR = local.R / 255f, effG = local.G / 255f, effB = local.B / 255f;
@@ -146,7 +149,7 @@ internal sealed class BacklightEffectProcessor : VideoEffectProcessorBase
 
         if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
+                effectDescription.TimelinePosition.Frame, fps, isHeldRender, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
             effR = float.Lerp(local.R / 255f, light.Color.X, colorMix);

@@ -27,8 +27,8 @@ internal static class LightSignalStore
     /// </summary>
     public static void Publish(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, long validFrom, long validTo, object publisher, in LightState state)
-        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, publisher, state);
+        long frame, long validFrom, long validTo, bool isHeld, object publisher, in LightState state)
+        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, isHeld, publisher, state);
 
     /// <summary>
     /// 同一チャンネルの光源をすべて集め、立ち絵の位置に対する実効的な光へ合成して返す。
@@ -36,10 +36,10 @@ internal static class LightSignalStore
     /// </summary>
     public static bool TryResolve(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, int fps, Vector2 itemPos, out LightMath.ResolvedLight resolved)
+        long frame, int fps, bool isHeld, Vector2 itemPos, out LightMath.ResolvedLight resolved)
     {
         var buffer = perThreadBuffer ??= new List<LightState>(8);
-        if (!store.TryGetAll(sceneId, usage, channel, frame, buffer))
+        if (!store.TryGetAll(sceneId, usage, channel, frame, isHeld, buffer))
         {
             resolved = default;
             return false;

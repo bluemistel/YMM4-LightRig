@@ -75,7 +75,7 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         // 「明るさの追従」と二重に効いてしまうため、色は最大成分で正規化して色味だけを取り出す。
         if ((ambientColorMix > 0f || ambientIntensityMix > 0f)
             && AmbientSignalStore.TryGet(desc.SceneId, desc.Usage, item.Channel,
-                desc.TimelinePosition.Frame,
+                desc.TimelinePosition.Frame, RenderSide.IsHeld(desc),
                 // 光源自身の位置にある背景の色を拾う（背景が複数枚のとき、どれを見るかを決める）
                 new Vector2(drawDesc.Draw.X + offsetX, drawDesc.Draw.Y + offsetY), out var ambient))
         {
@@ -133,7 +133,8 @@ internal sealed class LightTargetProcessor(LightTargetEffect item) : IVideoEffec
         long itemStart = timelineFrame - frame;       // frame = ItemPosition.Frame
         LightSignalStore.Publish(
             desc.SceneId, desc.Usage, item.Channel,
-            timelineFrame, itemStart, itemStart + length + (long)item.PublishExtension, item, state);
+            timelineFrame, itemStart, itemStart + length + (long)item.PublishExtension,
+            RenderSide.IsHeld(desc), item, state);
 
         // プレビュー上の操作点（位置はアイテム中心からのオフセット＝OffsetX/Y と同じ座標系）
         var shape = (offsetX, offsetY, item.SourceType, range, falloffStart, angle, spotAngle, spotSoftness);

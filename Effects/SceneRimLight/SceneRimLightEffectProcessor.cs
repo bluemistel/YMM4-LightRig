@@ -127,6 +127,9 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
         var local = _item.LocalColor;
 
         // --- 光源の解決（連動 or 単体） ---
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
         Vector2 dir;
         float effR = local.R / 255f, effG = local.G / 255f, effB = local.B / 255f;
@@ -134,7 +137,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
 
         if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
+                effectDescription.TimelinePosition.Frame, fps, isHeldRender, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
 
@@ -143,7 +146,7 @@ internal sealed class SceneRimLightEffectProcessor : VideoEffectProcessorBase
             var source = new Vector3(light.Color.X, light.Color.Y, light.Color.Z);
             if (_item.ColorSource == RimColorSource.Ambient
                 && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                    effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
+                    effectDescription.TimelinePosition.Frame, isHeldRender, itemPos, out var ambient))
             {
                 source = ColorGrading.TuneLightColor(
                     new Vector3(ambient.X, ambient.Y, ambient.Z), colorTune);

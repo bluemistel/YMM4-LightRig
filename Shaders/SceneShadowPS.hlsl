@@ -2,10 +2,17 @@
 // 立ち絵のシルエット（アルファ）を接地線へ投影して地面に落ちる影を作る。出力は影だけ（元画像は含まない）。
 // Processor 側で GaussianBlur を通し、元画像の背面へ合成する。
 //
-// 【投影モデル】接地線から上へ shadowLength px ぶんの帯が影の領域。
-//   出力の地面からの高さ hOut を t = hOut / shadowLength (0..1) に正規化し、
+// 【投影モデル】接地線から shadowLength px ぶんの帯が影の領域。
+//   接地線からの距離 hOut を t = hOut / shadowLength (0..1) に正規化し、
 //   立ち絵の高さ h = t * inputHeight の位置をサンプリングする（＝全身が帯に収まる）。
 //   横へは hOut * lean だけずらす（光の反対側へ倒れる）。
+//
+//   【帯を伸ばす向き（flip）】
+//   flip=+1 … 接地線から画面の「上」へ＝奥へ伸びる。光源が被写体より手前にある構図。
+//   flip=-1 … 接地線から画面の「下」へ＝手前へ伸びる。逆光（光源が被写体より奥）の構図。
+//   光源の2D位置からは奥行きが分からないため自動判別できない。利用者に選ばせる。
+//   hOut は「接地線からの距離」なのでどちらでも正の値になり、
+//   足元が t=0・頭が t=1 という対応も lean の向きもそのまま成立する。
 //
 //   影の広がりが shadowLength と lean だけで決まるので、
 //   C# 側で必要な矩形を正確に計算できる（切れない・飛ばない）。
@@ -35,6 +42,8 @@ cbuffer Constants : register(b0)
     float shadowG;
     float shadowB;
     float tipBlur;      // 影の先端でのぼかし半径 (px)。接地部は 0
+    float flip;         // 帯を伸ばす向き。+1=奥（画面上）へ, -1=手前（画面下）へ
+    float _pad0; float _pad1; float _pad2; // 16 float（64byte）に揃える
 };
 
 // 先端ぼかしのサンプル数。黄金角スパイラルで円板状に散らす。
@@ -67,7 +76,9 @@ float4 main(float4 pos : SV_POSITION,
     float groundY = inputTop + inputHeight + groundOffset;
     float shadowLength = max(inputHeight * lengthRatio, 1.0f);
 
-    float hOut = groundY - posScene.y;          // 出力側の地面からの高さ
+    // 接地線からの距離。flip で「上へ伸びる／下へ伸びる」を切り替える。
+    // どちらの向きでも hOut は正になるので、この先の式は共通で済む。
+    float hOut = (groundY - posScene.y) * flip;
     if (hOut < 0.0f || hOut > shadowLength)
         return float4(0, 0, 0, 0);              // 影の帯の外
 

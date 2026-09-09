@@ -78,7 +78,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     readonly ConcurrentDictionary<(Guid SceneId, LightChannel Channel), ChannelSignals> channels = new();
 
     /// <summary>発信された値と、その発信元が存在するタイムライン上の範囲 [ValidFrom, ValidTo)。</summary>
-    readonly record struct Entry(T Value, long ValidFrom, long ValidTo)
+    readonly record struct Entry(T Value, long ValidFrom, long ValidTo, bool IsHeld)
     {
         /// <summary>指定フレームでこの値が有効か。範囲が未指定（To&lt;=From）なら常に有効。</summary>
         public bool CoversFrame(long frame)
@@ -96,6 +96,15 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         {
             foreach (var e in ByPublisher.Values)
                 if (e.CoversFrame(frame))
+                    return true;
+            return false;
+        }
+
+        /// <summary>指定した側（保持中か否か）の値がこの時刻にあるか。</summary>
+        public bool HasValueAt(long frame, bool isHeld)
+        {
+            foreach (var e in ByPublisher.Values)
+                if (e.IsHeld == isHeld && e.CoversFrame(frame))
                     return true;
             return false;
         }
@@ -119,6 +128,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     /// <paramref name="validFrom"/> / <paramref name="validTo"/> は<b>発信元アイテムが
     /// タイムライン上に存在する範囲</b>（半開区間）。消費側はこの範囲外のフレームでは
     /// この値を選ばない。範囲が不明なら両方 0 を渡すと常に有効として扱う。
+    /// <paramref name="isHeld"/> は <see cref="RenderSide.IsHeld"/>。場面切り替えの前後を見分けるための印。
     /// <paramref name="publisher"/> には<b>発信側エフェクトのアイテム</b>（プロセッサが保持している
     /// <c>item</c>）を渡す。これが同一フレーム内でのスロットの識別子になる。
     /// <b>プロセッサ自身（<c>this</c>）を渡してはいけない。</b>YMM4 は Usage ごとに別のプロセッサを
@@ -126,11 +136,11 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     /// </summary>
     public void Publish(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, long validFrom, long validTo, object publisher, T value)
+        long frame, long validFrom, long validTo, bool isHeld, object publisher, T value)
     {
         var signals = channels.GetOrAdd((sceneId, channel), _ => new ChannelSignals());
         var seq = Interlocked.Increment(ref sequence);
-        var entry = new Entry(value, validFrom, validTo);
+        var entry = new Entry(value, validFrom, validTo, isHeld);
 
         signals.ByUsage[usage] = (seq, entry);
 
@@ -187,6 +197,29 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     /// 「完全一致 → 最も近いフレーム」の順。いずれも<b>現在フレームを含む有効範囲を持つ値</b>
     /// が入っているスロットだけを対象にする。見つからなければ null。
     /// </summary>
+    /// <summary>指定した側の値を持つスロットだけを探す。見つからなければ null。</summary>
+    static FrameSlot? FindSlot(ChannelSignals signals, long frame, bool isHeld)
+    {
+        if (signals.ByFrame.TryGetValue(frame, out var exact) && exact.HasValueAt(frame, isHeld))
+            return exact;
+
+        long bestDistance = long.MaxValue, bestSeq = -1;
+        FrameSlot? nearest = null;
+        foreach (var entry in signals.ByFrame)
+        {
+            if (!entry.Value.HasValueAt(frame, isHeld))
+                continue;
+            long distance = entry.Key >= frame ? entry.Key - frame : frame - entry.Key;
+            if (distance < bestDistance || (distance == bestDistance && entry.Value.Seq > bestSeq))
+            {
+                bestDistance = distance;
+                bestSeq = entry.Value.Seq;
+                nearest = entry.Value;
+            }
+        }
+        return nearest;
+    }
+
     static FrameSlot? FindSlot(ChannelSignals signals, long frame)
     {
         if (signals.ByFrame.TryGetValue(frame, out var exact) && exact.HasValueAt(frame))
@@ -220,15 +253,25 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     /// 値を1つ取得する。<paramref name="frame"/> には消費側の <c>TimelinePosition.Frame</c> を渡すこと。
     /// 同一フレームに複数の発信元がある場合はそのうちの1つを返す（環境光のように1つで足りる用途向け）。
     /// </summary>
-    public bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, out T value)
+    public bool TryGet(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, bool isHeld, out T value)
     {
         value = default!;
         if (!channels.TryGetValue((sceneId, channel), out var signals))
             return false;
 
-        var slot = FindSlot(signals, frame);
+        // 同じ側（場面切り替えの前／後）の値を優先し、無ければ側を問わず拾う。
+        // フォールバックを残すので、以前 true を返していた場面で false にはならない。
+        var slot = FindSlot(signals, frame, isHeld) ?? FindSlot(signals, frame);
         if (slot is not null)
         {
+            foreach (var e in slot.ByPublisher.Values)
+            {
+                if (e.IsHeld == isHeld && e.CoversFrame(frame))
+                {
+                    value = e.Value;
+                    return true;
+                }
+            }
             foreach (var e in slot.ByPublisher.Values)
             {
                 if (!e.CoversFrame(frame))
@@ -264,15 +307,24 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     /// 同一フレームに発信されたすべての値を取得する（複数光源の合成用）。
     /// 見つからない場合はフォールバックとして単一値を1件だけ返す。
     /// </summary>
-    public bool TryGetAll(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, List<T> destination)
+    public bool TryGetAll(Guid sceneId, TimelineSourceUsage usage, LightChannel channel, long frame, bool isHeld, List<T> destination)
     {
         destination.Clear();
         if (!channels.TryGetValue((sceneId, channel), out var signals))
             return false;
 
-        var slot = FindSlot(signals, frame);
+        // 同じ側の値だけを集める。無ければ側を問わず集める。
+        var slot = FindSlot(signals, frame, isHeld) ?? FindSlot(signals, frame);
         if (slot is not null)
         {
+            foreach (var e in slot.ByPublisher.Values)
+            {
+                if (e.IsHeld == isHeld && e.CoversFrame(frame))
+                    destination.Add(e.Value);
+            }
+            if (destination.Count > 0)
+                return true;
+
             foreach (var e in slot.ByPublisher.Values)
             {
                 if (e.CoversFrame(frame))
@@ -282,7 +334,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
                 return true;
         }
 
-        if (TryGet(sceneId, usage, channel, frame, out var single))
+        if (TryGet(sceneId, usage, channel, frame, isHeld, out var single))
         {
             destination.Add(single);
             return true;

@@ -1,4 +1,5 @@
 ﻿using System.Numerics;
+using System.Runtime.CompilerServices;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -34,25 +35,54 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     private ID2D1Bitmap1? _target;   // 描画先（NxN, Target）
     private ID2D1Bitmap1? _staging;  // 読み戻し用（NxN, CpuRead）
 
-    // 読み戻しの失敗は「永久停止」にしない。一度の失敗で二度と測らなくなると、
-    // 古い色を配り続けたまま復帰できず、原因も分からない状態になるため
-    // （実際に「停止すると古い環境光のまま固まる」不具合の候補になった）。
-    // 失敗するたびに間隔を空けて再挑戦する（例外の連発は避けつつ復帰はできる）。
-    private int _failureCount;
-    private long _retryAfterFrame = long.MinValue;
+    /// <summary>
+    /// 測定結果は<b>プロセッサではなくアイテム単位</b>で持つ。
+    ///
+    /// <para>
+    /// 【なぜアイテム単位か（2026-09・実機／IL 調査済み）】
+    /// YMM4 は Usage ごとに別プロセッサを作るうえ、<b>場面切り替え中は前後2本の
+    /// TimelineSource がそれぞれ独自にプロセッサを作り直す</b>
+    /// （<c>TransitionSource.ctor</c> が <c>TransitionItemPicker</c> と <c>TimelineSource</c> を
+    /// 2組生成する）。プロセッサに測定結果を持たせると、<b>切り替えが始まった瞬間に
+    /// 生まれたてで測定値ゼロのプロセッサ</b>になり、初回サンプリングが失敗した時点で
+    /// <c>HasColor</c> が false のまま＝<b>何も発信しない</b>。
+    /// 消費側は固定色へフォールバックし、切り替え中だけ立ち絵がなじまなくなる。
+    /// アイテム単位で持てば、作り直された側も直前の測定値をそのまま引き継げる。
+    /// </para>
+    ///
+    /// <para>
+    /// 発信元キーを <c>item</c> にしているのと同じ理由（M11）。
+    /// 前後2本は並列に Update されるので <see cref="Gate"/> で測定を直列化する
+    /// （同じアイテム＝同じ絵なので、片方が測れば他方は測り直さなくてよい）。
+    /// </para>
+    /// </summary>
+    private sealed class SampleCache
+    {
+        public readonly Lock Gate = new();
 
-    private long _lastSampledFrame = long.MinValue;
-    private Vector4 _lastColor = new(0.5f, 0.5f, 0.5f, 1f);
-    private Vector3[]? _lastGrid;
-    private float[]? _lastGridCoverage;
-    private float _lastCoverage = 1f;
-    private Vector2 _lastLocalSize;  // 入力画像のローカルサイズ（px）。矩形は毎フレーム drawDesc から作り直す
-    private bool _hasColor;
+        public long LastSampledFrame = long.MinValue;
+        public Vector4 Color = new(0.5f, 0.5f, 0.5f, 1f);
+        public Vector3[]? Grid;
+        public float[]? GridCoverage;
+        public float Coverage = 1f;
+        public Vector2 LocalSize;   // 入力画像のローカルサイズ（px）。矩形は毎フレーム drawDesc から作り直す
+        public bool HasColor;
+
+        // 読み戻しの失敗は「永久停止」にしない。一度の失敗で二度と測らなくなると、
+        // 古い色を配り続けたまま復帰できず、原因も分からない状態になるため。
+        public int FailureCount;
+        public long RetryAfterFrame = long.MinValue;
+    }
+
+    static readonly ConditionalWeakTable<AmbientSamplerEffect, SampleCache> caches = new();
+
+    private readonly SampleCache _cache;
 
     public AmbientSamplerProcessor(IGraphicsDevicesAndContext devices, AmbientSamplerEffect item)
     {
         _devices = devices;
         _item = item;
+        _cache = caches.GetOrCreateValue(item);
     }
 
     public ID2D1Image Output => _input!;
@@ -78,43 +108,53 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
         // これをしないと、真夜中→夕方へ1フレームずつ戻したとき
         // 差分が interval に達するまで（既定5フレーム）古い色が出続ける。
         //
-        // 【差分の計算は _hasColor が true のときだけ行うこと】
-        // _lastSampledFrame の初期値は long.MinValue なので、frame=0（タイムライン先頭へ
+        // 【差分の計算は HasColor が true のときだけ行うこと】
+        // LastSampledFrame の初期値は long.MinValue なので、frame=0（タイムライン先頭へ
         // ショートカットで飛んだ場合など）だと frame - long.MinValue が long.MinValue に
         // オーバーフローし、Math.Abs が OverflowException を投げてプレビューが落ちる。
-        var needSample = !_hasColor;
-        if (!needSample)
+        //
+        // 測定は同一アイテムで共有する（場面切り替え中は前後2本が並列に走るため）。
+        lock (_cache.Gate)
         {
-            long delta = frame - _lastSampledFrame; // 双方とも実在のフレームなので安全
-            needSample = delta < 0 || delta >= interval;
-        }
-
-        var canTry = _failureCount == 0 || frame >= _retryAfterFrame;
-        if (canTry && needSample)
-        {
-            if (TrySample(out var color, out var grid, out var gridCoverage, out var coverage, out var localSize))
+            var needSample = !_cache.HasColor;
+            if (!needSample)
             {
-                _lastColor = color;
-                _lastGrid = grid;
-                _lastGridCoverage = gridCoverage;
-                _lastCoverage = coverage;
-                _lastLocalSize = localSize;
-                _hasColor = true;
-                _lastSampledFrame = frame;
-                _failureCount = 0;
+                long delta = frame - _cache.LastSampledFrame; // 双方とも実在のフレームなので安全
+                needSample = delta < 0 || delta >= interval;
             }
-            else
+
+            var canTry = _cache.FailureCount == 0 || frame >= _cache.RetryAfterFrame;
+            if (canTry && needSample)
             {
-                // 失敗回数に応じて再挑戦までの間隔を伸ばす（最大 600 フレーム）
-                _failureCount++;
-                _retryAfterFrame = frame + Math.Min(_failureCount, 10) * 60;
+                if (TrySample(out var color, out var grid, out var gridCoverage, out var coverage, out var localSize))
+                {
+                    _cache.Color = color;
+                    _cache.Grid = grid;
+                    _cache.GridCoverage = gridCoverage;
+                    _cache.Coverage = coverage;
+                    _cache.LocalSize = localSize;
+                    _cache.HasColor = true;
+                    _cache.LastSampledFrame = frame;
+                    _cache.FailureCount = 0;
+                }
+                else
+                {
+                    // 【最初の失敗はすぐ再挑戦する】
+                    // 以前は 1回目から 60 フレーム待っていたため、場面切り替えの開始直後に
+                    // 一度でも失敗すると切り替えが終わるまで（30fps で2秒）測り直せず、
+                    // まだ一度も測れていない状態では何も発信できないままだった。
+                    // 2,4,8… と倍々で伸ばせば、一時的な失敗からは即座に復帰しつつ
+                    // 恒常的な失敗では例外の連発も避けられる。
+                    _cache.FailureCount++;
+                    _cache.RetryAfterFrame = frame + (1L << Math.Min(_cache.FailureCount, 6));
+                }
             }
         }
 
         // 毎フレーム（自 Usage 向けに）最後に測った色を発信する。
         // 矩形だけは毎フレーム作り直す。サンプリングを間引いていても、
         // 背景が動けば「どのセルがどこか」の対応付けは追従させたいため。
-        if (_hasColor)
+        if (_cache.HasColor)
         {
             var min = SceneRect(drawDesc, out var size);
             // 発信元キーは Usage をまたいで同一の _item（プロセッサは Usage ごとに別インスタンス）
@@ -124,14 +164,15 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
             long itemStart = frame - desc.ItemPosition.Frame;
             AmbientSignalStore.Publish(
                 desc.SceneId, desc.Usage, _item.Channel,
-                frame, itemStart, itemStart + desc.ItemDuration.Frame + (long)_item.PublishExtension, _item, new AmbientState
+                frame, itemStart, itemStart + desc.ItemDuration.Frame + (long)_item.PublishExtension,
+                RenderSide.IsHeld(desc), _item, new AmbientState
             {
                 // 「いつ測った値か」を刻む。消費側はこれで古い時刻の値を弾く。
-                Frame = _lastSampledFrame,
-                Color = _lastColor,
-                Grid = _lastGrid,
-                GridCoverage = _lastGridCoverage,
-                Coverage = _lastCoverage,
+                Frame = _cache.LastSampledFrame,
+                Color = _cache.Color,
+                Grid = _cache.Grid,
+                GridCoverage = _cache.GridCoverage,
+                Coverage = _cache.Coverage,
                 RectMin = min,
                 RectSize = size,
             });
@@ -147,7 +188,7 @@ internal sealed class AmbientSamplerProcessor : IVideoEffectProcessor
     /// </summary>
     private Vector2 SceneRect(DrawDescription drawDesc, out Vector2 size)
     {
-        size = _lastLocalSize * drawDesc.Zoom;
+        size = _cache.LocalSize * drawDesc.Zoom;
         var center = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
         return center - size * 0.5f;
     }

@@ -71,13 +71,16 @@ internal sealed class SceneShadingEffectProcessor : VideoEffectProcessorBase
         var colorTune = (float)(_item.ColorTune.GetValue(frame, length, fps) / 100.0);
         var mode = (float)(int)_item.Mode;
 
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
         Vector2 dir;
         float lightZ = 1f;
 
         if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
+                effectDescription.TimelinePosition.Frame, fps, isHeldRender, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
             lightZ = Math.Clamp(light.Height / 400f, 0.05f, 4f);
@@ -101,7 +104,7 @@ internal sealed class SceneShadingEffectProcessor : VideoEffectProcessorBase
         if (_item.ColorSource == ShadeColorSource.Ambient
             && _item.Channel != LightChannelOrOff.Off
             && AmbientSignalStore.TryGet(effectDescription.SceneId, effectDescription.Usage,
-                (LightChannel)_item.Channel, effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
+                (LightChannel)_item.Channel, effectDescription.TimelinePosition.Frame, isHeldRender, itemPos, out var ambient))
         {
             // 彩度が強すぎる背景で影が極端な色にならないよう整形してから色味を取り出す
             var tuned = ColorGrading.TuneLightColor(new Vector3(ambient.X, ambient.Y, ambient.Z), colorTune);

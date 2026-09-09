@@ -10,6 +10,18 @@ using LightRig.Shared;
 
 namespace LightRig.Effects.SceneShadow;
 
+/// <summary>影の帯を伸ばす向き。</summary>
+public enum ShadowDirection
+{
+    [Display(Name = "奥へ（順光）",
+        Description = "接地線から画面の上へ伸ばす。光源が被写体より手前にある構図")]
+    Away = 0,
+
+    [Display(Name = "手前へ（逆光）",
+        Description = "接地線から画面の下へ伸ばす。光源が被写体より奥にあり、影がカメラ側へ落ちる構図")]
+    Toward = 1,
+}
+
 /// <summary>
 /// シーン光源に連動する落とし影。立ち絵のシルエットを接地線へ投影し、地面に落ちる影を描く。
 /// 「シーン光源ターゲット」と同じチャンネルで、影の向き（光の反対側）と長さ（光の高さ）に自動追従する。
@@ -41,6 +53,14 @@ public class SceneShadowEffect : VideoEffectBase
     [Display(GroupName = "連動", Name = "角度オフセット", Description = "光源方向への補正角（度）。連動無効時は絶対角（0=上）")]
     [AnimationSlider("F0", "°", -180, 180)]
     public Animation AngleOffset { get; } = new Animation(0, -360, 360);
+
+    [Display(GroupName = "形状", Name = "伸びる向き",
+        Description = "影を接地線から画面の上（奥）へ伸ばすか、下（手前）へ伸ばすか。"
+            + "光源が被写体より手前にあるか奥にあるかは2Dの光源位置からは判別できないため手動で選びます。"
+            + "背景の他の影（建物や木）がどちらへ落ちているかに合わせてください")]
+    [EnumComboBox]
+    public ShadowDirection Direction { get => direction; set => Set(ref direction, value); }
+    ShadowDirection direction = ShadowDirection.Away;
 
     [Display(GroupName = "形状", Name = "長さ", Description = "影の長さの倍率。100%で光源の高さから算出した長さ。立ち絵の高さに対する割合として効く")]
     [AnimationSlider("F0", "%", 10, 300)]

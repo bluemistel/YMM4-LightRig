@@ -127,6 +127,9 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         var lumaMatch = (float)(_item.LumaMatch.GetValue(frame, length, fps) / 100.0);
         var local = _item.LocalColor;
 
+        // 場面切り替えの前後どちら側の描画か。同じ側の発信を優先して結び付ける
+        // （前の場面にいる立ち絵が次の場面の光や環境光を拾わないようにする）。
+        var isHeldRender = RenderSide.IsHeld(effectDescription);
         var itemPos = new Vector2(drawDesc.Draw.X, drawDesc.Draw.Y);
 
         // --- 光源方向の解決（連動 or 単体） ---
@@ -140,7 +143,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
         }
         else if (_item.Channel != LightChannelOrOff.Off
             && LightSignalStore.TryResolve(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, fps, itemPos, out var light))
+                effectDescription.TimelinePosition.Frame, fps, isHeldRender, itemPos, out var light))
         {
             dir = LightMath.Rotate(light.Dir, angleOffset);
             lightIntensity = light.Intensity;
@@ -158,7 +161,7 @@ internal sealed class BlendLightEffectProcessor : VideoEffectProcessorBase
 
         if (_item.Channel != LightChannelOrOff.Off
             && AmbientSignalStore.TryGetState(effectDescription.SceneId, effectDescription.Usage, (LightChannel)_item.Channel,
-                effectDescription.TimelinePosition.Frame, itemPos, out var ambient))
+                effectDescription.TimelinePosition.Frame, isHeldRender, itemPos, out var ambient))
         {
             // 拾った背景色を「光源らしい色」へ寄せる（0%なら素通し）
             var tunedFallback = ColorGrading.TuneLightColor(

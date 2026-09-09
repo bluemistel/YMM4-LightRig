@@ -92,8 +92,8 @@ internal static class AmbientSignalStore
     /// <summary><paramref name="frame"/> は <c>TimelinePosition.Frame</c> を渡すこと。</summary>
     public static void Publish(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, long validFrom, long validTo, object publisher, in AmbientState state)
-        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, publisher, state);
+        long frame, long validFrom, long validTo, bool isHeld, object publisher, in AmbientState state)
+        => store.Publish(sceneId, usage, channel, frame, validFrom, validTo, isHeld, publisher, state);
 
     /// <summary>
     /// 背景色を取得する。<paramref name="frame"/> は <c>TimelinePosition.Frame</c>。
@@ -109,10 +109,10 @@ internal static class AmbientSignalStore
     /// </summary>
     public static bool TryGetState(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, Vector2 itemPos, out AmbientState state)
+        long frame, bool isHeld, Vector2 itemPos, out AmbientState state)
     {
         var buffer = perThreadBuffer ??= new List<AmbientState>(4);
-        if (!store.TryGetAll(sceneId, usage, channel, frame, buffer) || buffer.Count == 0)
+        if (!store.TryGetAll(sceneId, usage, channel, frame, isHeld, buffer) || buffer.Count == 0)
         {
             state = default;
             return false;
@@ -206,9 +206,9 @@ internal static class AmbientSignalStore
     /// <summary>代表色だけが必要な消費側向けの簡易版。</summary>
     public static bool TryGet(
         Guid sceneId, TimelineSourceUsage usage, LightChannel channel,
-        long frame, Vector2 itemPos, out Vector4 color)
+        long frame, bool isHeld, Vector2 itemPos, out Vector4 color)
     {
-        if (TryGetState(sceneId, usage, channel, frame, itemPos, out var state))
+        if (TryGetState(sceneId, usage, channel, frame, isHeld, itemPos, out var state))
         {
             color = state.Color;
             return true;
