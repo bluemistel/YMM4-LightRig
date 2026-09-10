@@ -83,6 +83,29 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         /// <summary>指定フレームでこの値が有効か。範囲が未指定（To&lt;=From）なら常に有効。</summary>
         public bool CoversFrame(long frame)
             => ValidTo <= ValidFrom || (frame >= ValidFrom && frame < ValidTo);
+
+        /// <summary>
+        /// 消費側がこの値を使えるか。
+        ///
+        /// <para>
+        /// 【保持中の値は有効範囲を問わない（2026-09・エンコードでのみ再現した不具合）】
+        /// <c>IsHeld</c> ＝「終わったアイテムが場面切り替えのために意図的に描画されている」状態。
+        /// このとき描かれているのは<b>凍結された過去の瞬間</b>なので、
+        /// 発信元アイテムがタイムライン上に存在するかという情報は意味を持たない。
+        /// 範囲で弾くと「最も近いフレーム」のフォールバックが機能せず、
+        /// <b>同一フレーム内で発信側が消費側より先に走ったかどうかの運任せ</b>になる。
+        /// プレビューは同じフレームを何度も描くので履歴が埋まり自然に直るが、
+        /// 1パスしか描かないエンコードでは半分の確率で外れ、立ち絵が固定色のまま白く出る。
+        /// </para>
+        ///
+        /// <para>
+        /// ただし<b>保持中の値を使えるのは保持中の描画だけ</b>に限る。
+        /// そうしないと、切り替えが終わったあとも前の場面の値が
+        /// （範囲を問わないので）永久に拾われてしまう。
+        /// </para>
+        /// </summary>
+        public bool IsUsableAt(long frame, bool consumerHeld)
+            => IsHeld ? consumerHeld : CoversFrame(frame);
     }
 
     /// <summary>同一フレームに発信された値。発信元（エフェクトのアイテム）ごとにスロットを持つ。</summary>
@@ -91,21 +114,19 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         public readonly ConcurrentDictionary<object, Entry> ByPublisher = new(ReferenceEqualityComparer.Instance);
         public long Seq;
 
-        /// <summary>この時刻に有効な値が1つでもあるか。</summary>
-        public bool HasValueAt(long frame)
+        /// <summary>
+        /// この時刻に使える値が1つでもあるか。
+        /// <paramref name="requireSameSide"/> が true なら消費側と同じ側の値だけを数える。
+        /// </summary>
+        public bool HasValueAt(long frame, bool consumerHeld, bool requireSameSide)
         {
             foreach (var e in ByPublisher.Values)
-                if (e.CoversFrame(frame))
+            {
+                if (requireSameSide && e.IsHeld != consumerHeld)
+                    continue;
+                if (e.IsUsableAt(frame, consumerHeld))
                     return true;
-            return false;
-        }
-
-        /// <summary>指定した側（保持中か否か）の値がこの時刻にあるか。</summary>
-        public bool HasValueAt(long frame, bool isHeld)
-        {
-            foreach (var e in ByPublisher.Values)
-                if (e.IsHeld == isHeld && e.CoversFrame(frame))
-                    return true;
+            }
             return false;
         }
     }
@@ -141,15 +162,10 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         var signals = channels.GetOrAdd((sceneId, channel), _ => new ChannelSignals());
         var seq = Interlocked.Increment(ref sequence);
 
-        // 【保持中は有効範囲を現在フレームまで自動で伸ばす】
-        // isHeld ＝「終わったアイテムが場面切り替えのために意図的に描画されている」状態。
-        // 通常の再生では終わったアイテムはそもそも描画されないので、この状態なら
-        // 現在フレームでも値が有効とみなしてよい。
-        // これにより利用者が切り替えの長さを手入力する必要が無くなる（旧「発信の延長」）。
-        // たき火が普通に終わった場合は isHeld にならないので、光が残らない修正は維持される。
-        if (isHeld && validTo > validFrom && validTo <= frame)
-            validTo = frame + 1;
-
+        // 保持中（isHeld）の値は有効範囲を問わずに使われる（Entry.IsUsableAt を参照）。
+        // 以前はここで validTo = frame + 1 と「現在フレームだけ」へ伸ばしていたが、
+        // それだと各エントリが1フレームしか有効にならず、
+        // 同一フレーム内で発信側が先に走ったかどうかの運任せになっていた（エンコードで露見）。
         var entry = new Entry(value, validFrom, validTo, isHeld);
 
         signals.ByUsage[usage] = (seq, entry);
@@ -160,8 +176,13 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         // 履歴に残る他フレームの値はすべて編集前のものなので捨てる。
         // これをしないと、まだ再描画されていないフレームで古い光源位置が読まれ、
         // 再生開始時に前の位置の光や影がちらつく。
+        // 【場面切り替え中は誤爆する】前後2本の描画は同じアイテムを発信元キーとして共有するため、
+        // 同じフレームへ違う値（例: 環境光追従で前後の背景色が違う）を書き合う。
+        // これを編集と誤認して履歴を捨てると、1パスしか描かないエンコードで値が消える。
+        // 側が一致するときだけ編集と見なす。
         if (changeComparer is not null
             && slot.ByPublisher.TryGetValue(publisher, out var previous)
+            && previous.IsHeld == isHeld
             && !changeComparer.Equals(previous.Value, value))
         {
             PurgePublisher(signals, publisher, frame);
@@ -203,40 +224,21 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
     }
 
     /// <summary>
-    /// 現在フレームに最も適したフレームスロットを探す。
-    /// 「完全一致 → 最も近いフレーム」の順。いずれも<b>現在フレームを含む有効範囲を持つ値</b>
-    /// が入っているスロットだけを対象にする。見つからなければ null。
+    /// 現在フレームに最も適したフレームスロットを探す。「完全一致 → 最も近いフレーム」の順。
+    /// 使える値（<see cref="Entry.IsUsableAt"/>）が入っているスロットだけを対象にする。
+    /// <paramref name="requireSameSide"/> が true なら、場面切り替えの同じ側の値を持つスロットに限る。
+    /// 見つからなければ null。
     /// </summary>
-    /// <summary>指定した側の値を持つスロットだけを探す。見つからなければ null。</summary>
-    static FrameSlot? FindSlot(ChannelSignals signals, long frame, bool isHeld)
+    static FrameSlot? FindSlot(ChannelSignals signals, long frame, bool consumerHeld, bool requireSameSide)
     {
-        if (signals.ByFrame.TryGetValue(frame, out var exact) && exact.HasValueAt(frame, isHeld))
-            return exact;
-
-        long bestDistance = long.MaxValue, bestSeq = -1;
-        FrameSlot? nearest = null;
-        foreach (var entry in signals.ByFrame)
-        {
-            if (!entry.Value.HasValueAt(frame, isHeld))
-                continue;
-            long distance = entry.Key >= frame ? entry.Key - frame : frame - entry.Key;
-            if (distance < bestDistance || (distance == bestDistance && entry.Value.Seq > bestSeq))
-            {
-                bestDistance = distance;
-                bestSeq = entry.Value.Seq;
-                nearest = entry.Value;
-            }
-        }
-        return nearest;
-    }
-
-    static FrameSlot? FindSlot(ChannelSignals signals, long frame)
-    {
-        if (signals.ByFrame.TryGetValue(frame, out var exact) && exact.HasValueAt(frame))
+        if (signals.ByFrame.TryGetValue(frame, out var exact)
+            && exact.HasValueAt(frame, consumerHeld, requireSameSide))
             return exact;
 
         // 最も近いフレームの値。
         // 背景アイテムがキャッシュされて再実行されなくても、シーク時に一度測っていれば拾える。
+        // 保持中の値は範囲を問わないので、場面切り替えの間ずっとここで拾える
+        // （同一フレーム内の評価順に依存しなくなる）。
         // 距離が同じなら新しい発信（Seq が大きい方）を採る。
         long bestDistance = long.MaxValue, bestSeq = -1;
         FrameSlot? nearest = null;
@@ -244,7 +246,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         {
             // 現在フレームに存在しないアイテムの値は拾わない
             // （終了したたき火の光が残り続けるのを防ぐ）。
-            if (!entry.Value.HasValueAt(frame))
+            if (!entry.Value.HasValueAt(frame, consumerHeld, requireSameSide))
                 continue;
 
             // Math.Abs は long.MinValue で例外になるため、引き算の向きで絶対値を作る
@@ -271,12 +273,13 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
 
         // 同じ側（場面切り替えの前／後）の値を優先し、無ければ側を問わず拾う。
         // フォールバックを残すので、以前 true を返していた場面で false にはならない。
-        var slot = FindSlot(signals, frame, isHeld) ?? FindSlot(signals, frame);
+        var slot = FindSlot(signals, frame, isHeld, requireSameSide: true)
+                ?? FindSlot(signals, frame, isHeld, requireSameSide: false);
         if (slot is not null)
         {
             foreach (var e in slot.ByPublisher.Values)
             {
-                if (e.IsHeld == isHeld && e.CoversFrame(frame))
+                if (e.IsHeld == isHeld && e.IsUsableAt(frame, isHeld))
                 {
                     value = e.Value;
                     return true;
@@ -284,7 +287,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
             }
             foreach (var e in slot.ByPublisher.Values)
             {
-                if (!e.CoversFrame(frame))
+                if (!e.IsUsableAt(frame, isHeld))
                     continue;
                 value = e.Value;
                 return true;
@@ -292,7 +295,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         }
 
         // 同じ Usage の最新値
-        if (signals.ByUsage.TryGetValue(usage, out var sameUsage) && sameUsage.Entry.CoversFrame(frame))
+        if (signals.ByUsage.TryGetValue(usage, out var sameUsage) && sameUsage.Entry.IsUsableAt(frame, isHeld))
         {
             value = sameUsage.Entry.Value;
             return true;
@@ -303,7 +306,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
         var foundAny = false;
         foreach (var entry in signals.ByUsage.Values)
         {
-            if (entry.Seq > newestSeq && entry.Entry.CoversFrame(frame))
+            if (entry.Seq > newestSeq && entry.Entry.IsUsableAt(frame, isHeld))
             {
                 newestSeq = entry.Seq;
                 value = entry.Entry.Value;
@@ -324,12 +327,13 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
             return false;
 
         // 同じ側の値だけを集める。無ければ側を問わず集める。
-        var slot = FindSlot(signals, frame, isHeld) ?? FindSlot(signals, frame);
+        var slot = FindSlot(signals, frame, isHeld, requireSameSide: true)
+                ?? FindSlot(signals, frame, isHeld, requireSameSide: false);
         if (slot is not null)
         {
             foreach (var e in slot.ByPublisher.Values)
             {
-                if (e.IsHeld == isHeld && e.CoversFrame(frame))
+                if (e.IsHeld == isHeld && e.IsUsableAt(frame, isHeld))
                     destination.Add(e.Value);
             }
             if (destination.Count > 0)
@@ -337,7 +341,7 @@ internal sealed class FrameSignalStore<T>(IEqualityComparer<T>? changeComparer =
 
             foreach (var e in slot.ByPublisher.Values)
             {
-                if (e.CoversFrame(frame))
+                if (e.IsUsableAt(frame, isHeld))
                     destination.Add(e.Value);
             }
             if (destination.Count > 0)
